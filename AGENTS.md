@@ -24,7 +24,7 @@ That base image is published for aarch64, amd64 and armv7, which is why `config.
 - `trail.py` — the busiest programs every Linux report carries, the syslog lines machines send in, and the range the
   page's Logs section downloads (a `.log` for one machine, a `.zip` of one each for several).
 - `page.html` — the page: one file, plain SVG, no libraries. Three views (everything, one machine, one check), routed
-  by the URL fragment (`#<machine>`, `#check:<name>`).
+  by the URL fragment (`#<machine>`, `#check:<id>`).
 - `config.yaml` — the add-on's metadata and its few options (see version bumps). `settings.example.json` and
   `monitors.json` are generic examples; `services.py` copies `monitors.json` into a data folder that has no check list
   yet, and never over one that is already there.
@@ -55,16 +55,16 @@ The metrics land in the history columns `history.COLUMNS`; a machine with none o
 Everything lives in `/share/home-watch` (`HOME_WATCH_DATA` moves it), as plain files:
 
 - `history/<machine> <year-month>.csv` — one row per report, 12 months kept per machine.
-- `services/<year-month>.csv` — one row per check state change (time, name, status, detail). Uptime, the hour strips
+- `services/<year-month>.csv` — one row per check state change (time, id, status, detail). Uptime, the hour strips
   and the outage list are all worked out from these.
-- `checks/<year-month>.csv` — one row per check every 5 minutes (checks passed, average response ms): the
+- `checks/<year-month>.csv` — one row per check every 5 minutes (id, checks passed, average response ms): the
   response-time graph. Both service folders keep 12 months.
 - `programs/<machine> <year-month>.csv` — programs at 1% of the CPU or more, per report, 12 months.
 - `logs/<machine> <year-month>.log` — the syslog lines a machine sent in, 3 months.
 - `state.json` — the live state; written at every check and on SIGTERM, so an update or restart loses no report.
 - `log.txt` — the add-on's own log (it also goes to stdout).
 - `monitors.json` — the check list (below); `settings.json` — the house's own names and numbers (below).
-- `push-codes.json` — the push checks' codes, `{"<check name>": "<code>"}`, written whole at 0600.
+- `push-codes.json` — the push checks' codes, `{"<check id>": "<code>"}`, written whole at 0600.
 
 Once a day the add-on drops the months each folder does not keep.
 
@@ -89,8 +89,11 @@ Nothing in `settings.json` is a secret, but it is one house's own list, so it st
 
 ### Service checks
 
-`monitors.json` is a plain list, one check per line, read at start. Each check has `name`, optional `group`, a `type`,
-`every` (seconds between runs), `retries` (failures in a row before it counts as down) and whatever its type needs:
+`monitors.json` is a plain list, one check per line, read at start. Each check has an `id`: a whole number, unique and
+never reused. Everything kept about a check is under that id — its state, history, outages, push code and pushes — so
+`name` is only the label shown on the page and used in alert and self-heal text. Renaming a check therefore loses
+nothing; changing or reusing its id would. Each check also has optional `group`, a `type`, `every` (seconds between
+runs), `retries` (failures in a row before it counts as down) and whatever its type needs:
 
 - `ping` (`host`), `port` (`host`, `port`), `http` (`url`, 200-299 counts), `dns` (`name_to_look_up`, `server`, `port`).
 - `dyndns` (`hostname`): asks a public IP-echo service for the network's real address and compares it with what the
@@ -108,14 +111,22 @@ A failing check is `pending` until it has failed `retries` more times in a row, 
 uses, along with the push URL shape and the strip. A check only writes a row to `services/` when its state changes, so
 uptime is cheap to work out and the file stays small.
 
+The upgrade is automatic on start: a check with no `id` gets the next free number (one past every id the list, the
+codes and the stored rows already hold) and `monitors.json` is written back with it, atomically, keeping the order and
+every other field. Name-keyed data moves to that check's id in the same start — the code in `push-codes.json`, and the
+`id` column of `services/` and `checks/` — so an existing install keeps all its history and every push code. It happens
+once: a second start changes nothing. A duplicate id is an error logged by the check's name, and the later check is
+skipped, never merged.
+
 ### Push codes
 
 The codes are **not** in `monitors.json`: that list is a plain file anyone may copy or commit, and a code in it would be
 a secret in git. They live in `push-codes.json` in the data folder (0600, written whole), which is why replacing the
 check list never loses them. A push check with no code gets one made (`secrets.token_hex(16)`) and a log line that
 names the check, never the code. A list still carrying a code in a `"token"` field is migrated on load: the code moves
-to `push-codes.json` and out of the list. Arriving codes are compared with `hmac.compare_digest`, so neither a wrong
-code nor the time an answer took says anything about the right one. A check's own page shows its push path to copy.
+to `push-codes.json` under the check's id and out of the list. A code kept under a name from before ids moves to the id
+too. Arriving codes are compared with `hmac.compare_digest`, so neither a wrong code nor the time an answer took says
+anything about the right one. A check's own page shows its push path to copy; the path carries the code, not the name.
 
 ### Alerts and self-heal
 
@@ -127,7 +138,7 @@ a machine may go without a report before that is a problem too — shown for a w
 Self-heal is off unless the `self_heal` option is on and `self_heal_webhook` is set; it is a separate webhook from the
 alerts. On a check that goes down (or comes back up) it posts Uptime Kuma's message shape —
 `{"heartbeat": {"status", "msg", "time"}, "monitor": {"name", "type", "script"}, "msg"}` — where `monitor.script` is
-`settings.json`'s `heal_script` with the check's `app` filled in (its name made into an id when it has no `app`), so the
+`settings.json`'s `heal_script` with the check's `app` filled in (its name made into a slug when it has no `app`), so the
 automation behind the webhook can start that script. With the option off, the add-on logs what it would have done.
 
 ### Trail
@@ -147,7 +158,7 @@ with no date keep the date of the line above them. One machine comes back as a `
 ### The page and its API
 
 `GET /` serves `page.html`; every other GET is one of `/api/status` (state, order, labels), `/api/services` (each
-check, its uptime and its 24-hour strip), `/api/history?machine=&days=`, `/api/check?name=&days=`,
+check, its id, its uptime and its 24-hour strip), `/api/history?machine=&days=`, `/api/check?id=&days=`,
 `/api/outages?days=`, `/api/log?machine=`, `/api/logs` (the machines with saved syslog files, plus the hub's own log)
 and `/api/logs/download?machines=&days=`, which answers as an attachment: a `.log`, or a `.zip` for several, with
 `days` 0 meaning everything kept. Only the names `/api/logs` itself listed are accepted, so no path comes from the page.
@@ -200,11 +211,13 @@ logged and skipped; the rest of the add-on must still work. A reporter can also 
 - `lefthook.yml` runs on every commit: gitleaks (refuses a commit whose new lines hold a password, token or key — this
   repo is public) and ruff on the staged Python. A fresh checkout needs `lefthook install` once. A refused commit means
   fix what it printed; never skip it (`--no-verify`, `LEFTHOOK=0`).
-- `cd addon && python -m unittest test_logs` — the one test file, for the Logs section's range cut and its `.log` /
-  `.zip`. It uses a temporary data folder, so it needs nothing else. Otherwise the cheapest proof of a change is ruff
-  plus the local run above: start it on an empty data folder, post a report, fetch `/api/status`, `/api/services` and
-  one graph. `python -m py_compile addon/*.py` catches a file that will not even import, and if `page.html`'s script
-  changed, `node --check` the script on its own (it is one `<script>` block, and the page has no build step).
+- `cd addon && python -m unittest test_logs test_services` — two test files: `test_logs` for the Logs section's range
+  cut and its `.log` / `.zip`, `test_services` for the checks' ids (the upgrade, history and codes moving to the id, a
+  rename, a duplicate id, a second start changing nothing). Both use a temporary data folder, so they need nothing
+  else. Otherwise the cheapest proof of a change is ruff plus the local run above: start it on an empty data folder,
+  post a report, fetch `/api/status`, `/api/services` and one graph. `python -m py_compile addon/*.py` catches a file
+  that will not even import, and if `page.html`'s script changed, `node --check` the script on its own (it is one
+  `<script>` block, and the page has no build step).
 
 ## Version bumps
 
@@ -228,4 +241,3 @@ ideas only, no code. The detail is at the top of each module.
   add-on options, not files), push codes (they live in `push-codes.json` in the data folder), and any real address,
   hostname or machine name. The example files — `addon/monitors.json`, `addon/settings.example.json`, the README's
   blocks — stay generic: made-up machine names, a private LAN range, `example.com`.
-

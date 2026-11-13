@@ -77,15 +77,22 @@ is normal; it is read when the add-on starts, so restart the add-on after editin
 - `allowed_networks` lists the address prefixes allowed to post reports and open the page.
 
 **`/share/home-watch/monitors.json`** is the service check list. The add-on writes the example list there on its first
-start and never overwrites it. One check per line, edit by hand, restart the add-on:
+start and never overwrites it (except to add an `id` to a check that has none). One check per line, edit by hand,
+restart the add-on:
 
 ```json
 [
-  {"name": "Router", "group": "Devices", "type": "ping", "host": "192.168.1.1", "every": 60, "retries": 2},
-  {"name": "NAS web page", "group": "Services", "type": "http", "url": "http://192.168.1.10/", "every": 60, "retries": 2},
-  {"name": "Nightly backup", "group": "Housekeeping", "type": "push", "every": 7200, "retries": 0}
+  {"id": 1, "name": "Router", "group": "Devices", "type": "ping", "host": "192.168.1.1", "every": 60, "retries": 2},
+  {"id": 2, "name": "NAS web page", "group": "Services", "type": "http", "url": "http://192.168.1.10/", "every": 60, "retries": 2},
+  {"id": 3, "name": "Nightly backup", "group": "Housekeeping", "type": "push", "every": 7200, "retries": 0}
 ]
 ```
+
+`id` is a whole number that identifies the check. Its history, uptime, outages and push code all live under that id, so
+the `name` is only the label shown on the page and in alert text: **rename a check as often as you like, but never
+change or reuse its `id`**. A check with no `id` gets the next free number on start, and the list is written back with
+it; the add-on also moves history and push codes that were kept under the old name to the id, so an upgrade loses
+nothing. Two checks with the same `id` is an error: the second one is logged and skipped.
 
 `every` is seconds between runs; `retries` is how many failures in a row make it down. `"off_ok": true` shows a device
 that is simply switched off as grey "off" instead of down. `"machine": "nas"` puts the check on that machine's page.
@@ -140,7 +147,7 @@ For something that cannot be pinged but can run a command: a nightly backup that
 machine without a reporter.
 
 ```json
-{"name": "Nightly backup", "group": "Housekeeping", "type": "push", "every": 7200, "retries": 0}
+{"id": 3, "name": "Nightly backup", "group": "Housekeeping", "type": "push", "every": 7200, "retries": 0}
 ```
 
 Restart the add-on, open that check's page from Home Watch, and copy the push path it shows. Call it when the job
@@ -151,8 +158,9 @@ curl "http://homeassistant.local:8790/api/push/<code>?status=up&msg=backup%20don
 ```
 
 No news for longer than `every` seconds (plus a 30-second grace) makes the check down; send `status=down` to report a
-failure. The codes are made on first start and kept in `/share/home-watch/push-codes.json`, not in `monitors.json`, and
-a check's page is where you copy its push path from.
+failure. The codes are made on first start and kept in `/share/home-watch/push-codes.json` under each check's id, not
+in `monitors.json`, and a check's page is where you copy its push path from. The path carries the code, not the name,
+so renaming the check does not change it.
 
 ## What it needs
 

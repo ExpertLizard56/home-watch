@@ -382,7 +382,7 @@ class Handler(BaseHTTPRequestHandler):
             except ValueError:
                 days = 1
             if last == 'check':
-                return self.reply(200, services.points(q.get('name', [''])[0], days))
+                return self.reply(200, services.points(q.get('id', [''])[0], days))
             if last == 'outages':
                 return self.reply(200, services.outages(days))
         if last == 'status':

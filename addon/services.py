@@ -8,7 +8,14 @@ list shipped in addon/monitors.json; a list that is already there is never overw
 - push: something else reports in at /api/push/<code>?status=up&msg=..., and silence longer than `every` = down;
 - machine (Home watch's own): one of its machines reported within `quiet` seconds (15 min if not set) with no problem.
 
-The push checks' codes are NOT in the list: they live in /share/home-watch/push-codes.json ({"<check name>": "<code>"},
+Every check has an "id": a whole number, unique, never reused. Everything kept about a check is under that id (its
+state, history, outages, push code, pushes), so its "name" is only the label shown: rename it as often as you like and
+nothing is lost. A check with no id gets the next free number on load, and monitors.json is written back with it (in
+place, order and every other field kept) - once; the next start changes nothing. A name-keyed code, history or outage
+left from before ids is moved to that check's id on the same load. A duplicate id is an error logged by name and the
+later check is skipped, never merged.
+
+The push checks' codes are NOT in the list: they live in /share/home-watch/push-codes.json ({"<check id>": "<code>"},
 made 0600, written whole). The list holds no secrets, so it can be copied or committed; copying a new check list over
 it never loses the codes. A list that still keeps a code in a "token" field is migrated on load: the code moves into
 push-codes.json, and the list is rewritten without it. A push check with no code at all gets one made
@@ -16,13 +23,13 @@ push-codes.json, and the list is rewritten without it. A push check with no code
 comparing the code with hmac.compare_digest, so a wrong code learns nothing from how long the answer took.
 A check that fails is "pending" until it has failed `retries` more times in a row, then "down", or "off" for a monitor
 with "off_ok": true (a TV switched off at the wall: normal, grey on the page, not counted against its uptime).
-Changes go in /share/home-watch/services/<year-month>.csv (time, name, status, detail); from them come the uptime
+Changes go in /share/home-watch/services/<year-month>.csv (time, id, status, detail); from them come the uptime
 (24 h, 30 days, a year), the hour-by-hour strip and the outage list. Every 5 minutes each check's results go in
-/share/home-watch/checks/<year-month>.csv (time, name, ok, checks, ms: its response times). Both kept 12 months.
+/share/home-watch/checks/<year-month>.csv (time, id, ok, checks, ms: its response times). Both kept 12 months.
 Monitors with "heal": true post a webhook message to Home Assistant's self-heal automation when they go down or come
 back, but only when the add-on's `self_heal` option is on. The message names the script that restarts the app
 (monitor.script), built from the `heal_script` setting in settings.json (default script.home_watch_heal_{app}) and
-the check's `app` field, or its name made into an id ("Media Hub" -> media_hub) when it has no `app`.
+the check's `app` field, or its name made into a slug ("Media Hub" -> media_hub) when it has no `app`.
 
 Borrowed from Uptime Kuma (github.com/louislam/uptime-kuma, MIT License, Copyright (c) 2021 Louis Lam): the monitor
 types and their up/down rules, retries with a pending state, the push URL shape (/api/push/<code>?status=&msg=) and
@@ -32,6 +39,7 @@ automation reads.
 
 import csv
 import hmac
+import io
 import json
 import os
 import random
@@ -50,7 +58,7 @@ from datetime import datetime
 
 DATA = os.environ.get('HOME_WATCH_DATA', '/share/home-watch')
 LIST = f'{DATA}/monitors.json'
-CODES = f'{DATA}/push-codes.json'  # {"<check name>": "<code>"}; never in git, so replacing the list keeps them
+CODES = f'{DATA}/push-codes.json'  # {"<check id>": "<code>"} (JSON keys are strings); never in git
 EVENTS = f'{DATA}/services'
 CHECKS_DIR = f'{DATA}/checks'
 KEEP_MONTHS = 12
@@ -60,12 +68,12 @@ HEAL_SCRIPT = 'script.home_watch_heal_{app}'  # the Home Assistant script self-h
 
 lock = threading.Lock()
 monitors = []
-status = {}  # name -> {state: up|pending|down|waiting, since, detail, fails, last, ms}
-pushes = {}  # check name -> (time, ok, msg)
-codes = {}  # check name -> its push code; a new dict on every load()
+status = {}  # check id -> {state: up|pending|down|waiting, since, detail, fails, last, ms}
+pushes = {}  # check id -> (time, ok, msg)
+codes = {}  # check id (as a string) -> its push code; a new dict on every load()
 machine = None  # watch.py sets this: machine id -> its latest report (or None)
 heal_script = HEAL_SCRIPT  # watch.py sets this from settings.json
-samples = {}  # name -> [ok, checks, ms total, ms count] since the last row was written
+samples = {}  # check id -> [ok, checks, ms total, ms count] since the last row was written
 cache = {}  # what summary() last worked out, and when
 
 
@@ -88,7 +96,8 @@ def show_list(found):
 
 
 def read_codes(note):
-    """name -> code. A missing file is normal (the first run); an unreadable one is said out loud (new codes then)."""
+    """key -> code: a check's id once the ids are in (a name left from before them, until load() moves it). A missing
+    file is normal (the first run); an unreadable one is said out loud (new codes then)."""
     try:
         with open(CODES, encoding='utf-8') as f:
             got = json.load(f)
@@ -100,9 +109,71 @@ def read_codes(note):
     return {str(k): str(v) for k, v in got.items() if v}
 
 
+def whole(value):
+    """A check's id as a whole number above zero, or None when it is not usable (missing, a string, a float, a bool,
+    zero or less)."""
+    return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else None
+
+
+def stored_ids():
+    """The ids any stored row already carries: a check's number is never handed out twice, so a check removed long
+    ago cannot pass its history to a new one. Read only when a number has to be made."""
+    found = set()
+    for folder in (EVENTS, CHECKS_DIR):
+        for f in months(folder):
+            with open(f'{folder}/{f}', newline='', encoding='utf-8') as fh:
+                rows = csv.reader(fh)
+                next(rows, None)  # the header
+                for row in rows:
+                    try:
+                        found.add(int(row[1]))
+                    except (IndexError, TypeError, ValueError):
+                        continue  # a name row from before ids, or a broken line
+    return found
+
+
+def next_number(used, known):
+    """The next free number: one past every id the list, the codes and the stored rows already hold."""
+    numbers = set(used)
+    for key in known:
+        try:
+            numbers.add(int(key))
+        except (TypeError, ValueError):
+            continue  # a name key from before ids
+    return max(numbers, default=0) + 1
+
+
+def migrate_history(by_name, note):
+    """Rows written before ids kept the check's name in the second column: rewrite each month's file once, putting
+    that check's id there and leaving a name no check has any more alone. Files already carrying ids are untouched."""
+    for folder in (EVENTS, CHECKS_DIR):
+        for f in months(folder):
+            path = f'{folder}/{f}'
+            with open(path, encoding='utf-8') as fh:
+                first = fh.readline()  # only the header: a file already carrying ids is not read whole again
+            head = next(csv.reader([first]), []) if first else []
+            if len(head) < 2 or head[1] != 'name':
+                continue
+            with open(path, newline='', encoding='utf-8') as fh:
+                rows = list(csv.reader(fh))
+            rows[0][1] = 'id'
+            for row in rows[1:]:
+                if len(row) > 1 and row[1] in by_name:
+                    row[1] = str(by_name[row[1]])
+            buf = io.StringIO()
+            csv.writer(buf, lineterminator='\n').writerows(rows)
+            tmp = path + '.tmp'
+            with open(tmp, 'w', encoding='utf-8') as fh:
+                fh.write(buf.getvalue())
+            os.replace(tmp, path)
+            note(f"service history {os.path.basename(folder)}/{f}: check names replaced by their ids")
+
+
 def load(note=None):
-    """Read the check list and the push codes. A code still kept in a check's "token" field moves into
-    push-codes.json and out of the list; a push check with no code gets one, and one log line names it."""
+    """Read the check list and the push codes, and give every check its id: one without one gets the next free
+    number, and monitors.json is written back with it (once). A code still kept in a check's "token" field, or under
+    its name from before ids, moves into push-codes.json under the check's id; a push check with no code gets one. A
+    duplicate id is an error logged by the check's name, and the later check is skipped, never merged."""
     global codes
     note = note or (lambda text: None)
     if not os.path.exists(LIST):
@@ -110,29 +181,65 @@ def load(note=None):
     with open(LIST, encoding='utf-8') as f:
         found = json.load(f)
     known = read_codes(note)
-    moved = made = False
+    changed = False
+    used = {m['id'] for m in found if whole(m.get('id'))}
+    reserved = None
     for m in found:
+        if whole(m.get('id')) is not None:
+            continue
+        if reserved is None:
+            reserved = stored_ids()
+        if 'id' in m:
+            note(f"check {m.get('name', '?')}: its id is not a whole number above zero, so it got a new one")
+        m['id'] = next_number(used | reserved, known)
+        used.add(m['id'])
+        changed = True
+    kept, seen = [], {}
+    for m in found:
+        label = m.get('name', '?')
+        if m['id'] in seen:
+            note(f"monitors.json: {label} has id {m['id']}, already used by {seen[m['id']]}: skipped")
+            changed = True
+            continue
+        seen[m['id']] = label
+        kept.append(m)
+    moved = made = False
+    for m in kept:
         if 'token' in m:  # the old place for a push check's code, or where one copy of the list still keeps it
-            if not known.get(m['name']):
-                known[m['name']] = m.pop('token')
+            if not known.get(str(m['id'])):
+                known[str(m['id'])] = m.pop('token')
             else:
                 m.pop('token')
+            moved = changed = True
+    ids = {str(m['id']) for m in kept}
+    for m in kept:
+        key, label = str(m['id']), str(m.get('name', ''))
+        if not label or label == key or label not in known:
+            continue
+        if key not in known:  # a code still under the check's old name: it moves to its id and keeps its value
+            known[key] = known.pop(label)
             moved = True
-    for m in found:
-        if m.get('type') == 'push' and not known.get(m['name']):
-            known[m['name']] = secrets.token_hex(16)
-            note(f"push check {m['name']}: no code yet, so one was made (see push-codes.json)")
+        elif label not in ids:  # both places: the id's own code is in use, the name's copy is dropped
+            known.pop(label)
+            moved = True
+    for m in kept:
+        if m.get('type') == 'push' and not known.get(str(m['id'])):
+            known[str(m['id'])] = secrets.token_hex(16)
+            note(f"push check {m.get('name', m['id'])}: no code yet, so one was made (see push-codes.json)")
             made = True
+    if changed:
+        save(LIST, show_list(kept))
+        note(f"monitors.json: every check now has its id ({len(kept)} checks)")
     if moved:
-        save(LIST, show_list(found))
-        note("monitors.json: its push codes moved to push-codes.json and out of the list")
+        note("push-codes.json: each push code is kept under its check's id now")
     if moved or made:
-        save(CODES, json.dumps(known, indent=2) + '\n')
+        save(CODES, json.dumps(known, indent=2, sort_keys=True) + '\n')
+    migrate_history({str(m.get('name', '')): m['id'] for m in kept if m.get('name')}, note)
     with lock:
         codes = known
-        monitors[:] = found
-        for m in found:
-            status.setdefault(m['name'], {'state': 'waiting', 'since': time.time(), 'detail': '', 'fails': 0, 'last': 0})
+        monitors[:] = kept
+        for m in kept:
+            status.setdefault(m['id'], {'state': 'waiting', 'since': time.time(), 'detail': '', 'fails': 0, 'last': 0})
 
 
 # ---- the checks: each returns (ok, detail, milliseconds) ----
@@ -198,7 +305,7 @@ def check_dyndns(m):
 
 
 def check_push(m):
-    got = pushes.get(m['name'])  # take_push files it under the check's name, not its code
+    got = pushes.get(m['id'])  # take_push files it under the check's id, not its code
     if not got:
         return None, 'no report yet', 0
     when, ok, msg = got
@@ -223,7 +330,7 @@ CHECKS = {'ping': check_ping, 'port': check_port, 'http': check_http, 'dns': che
 
 
 def run_one(m, options, note):
-    name = m['name']
+    cid = m['id']
     try:
         ok, detail, ms = CHECKS[m['type']](m)
     except Exception as e:  # a refused connection, a timeout...
@@ -231,14 +338,14 @@ def run_one(m, options, note):
     now = time.time()
     with lock:
         if ok is not None:
-            got = samples.setdefault(name, [0, 0, 0.0, 0])
+            got = samples.setdefault(cid, [0, 0, 0.0, 0])
             got[1] += 1
             if ok:
                 got[0] += 1
                 if ms:
                     got[2] += ms
                     got[3] += 1
-        s = status[name]
+        s = status[cid]
         s['last'], s['ms'] = now, round(ms)
         old = s['state']
         if ok is None:  # a push monitor nothing has reported to yet, or a machine with no report yet
@@ -255,24 +362,24 @@ def run_one(m, options, note):
             return
         s['state'], s['since'] = new, now
     if new in ('up', 'down', 'off') or old == 'waiting':
-        log_event(now, name, new, detail)
+        log_event(now, cid, new, detail)
     if m.get('heal') and (new == 'down' or (new == 'up' and old == 'down')):
         heal(m, new, detail, options, note)
 
 
-def log_event(now, name, state, detail):
+def log_event(now, cid, state, detail):
     os.makedirs(EVENTS, exist_ok=True)
     path = f"{EVENTS}/{datetime.fromtimestamp(now):%Y-%m}.csv"
     new = not os.path.exists(path)
     with open(path, 'a', encoding='utf-8') as f:
         if new:
-            f.write('time,name,status,detail\n')
+            f.write('time,id,status,detail\n')
         clean = detail.replace('"', "'")
-        f.write(f'{datetime.fromtimestamp(now):%Y-%m-%d %H:%M:%S},"{name}",{state},"{clean}"\n')
+        f.write(f'{datetime.fromtimestamp(now):%Y-%m-%d %H:%M:%S},{cid},{state},"{clean}"\n')
 
 
 def app_name(m):
-    """The app a check's self-heal script restarts: its `app` field, else its name made into an id, so
+    """The app a check's self-heal script restarts: its `app` field, else its name made into a slug, so
     "Media Hub" and "media_hub" both name the same app."""
     got = str(m.get('app') or '').strip()
     if not got:
@@ -299,18 +406,23 @@ def heal(m, state, detail, options, note):
 
 
 def take_push(code, query):
-    """A push check's report in. The code names the check (push-codes.json); every code is compared with
+    """A push check's report in. The code finds the check's id in push-codes.json; every code is compared with
     hmac.compare_digest, so neither a wrong code nor the time an answer took says anything about the right one."""
     given = str(code).encode()
     with lock:
-        name = None
-        for known, saved in codes.items():
+        cid = None
+        for key, saved in codes.items():
             if hmac.compare_digest(saved.encode(), given):
-                name = known
-        if name is None:
+                try:
+                    cid = int(key)
+                except (TypeError, ValueError):
+                    return False  # a code left under a name from before ids: no check of that name any more
+                if cid not in {m['id'] for m in monitors}:
+                    return False  # a code for a check that has since been removed
+        if cid is None:
             return False
         st = (query.get('status', ['up'])[0] or 'up').lower()
-        pushes[name] = (time.time(), st == 'up', query.get('msg', [''])[0][:200])
+        pushes[cid] = (time.time(), st == 'up', query.get('msg', [''])[0][:200])
     return True
 
 
@@ -331,9 +443,9 @@ def loop(options, note):
             tidied = now
             tidy(note)
         with lock:
-            due = [m for m in monitors if now - status[m['name']]['last'] >= int(m.get('every', 60)) - 1]
+            due = [m for m in monitors if now - status[m['id']]['last'] >= int(m.get('every', 60)) - 1]
             for m in due:
-                status[m['name']]['last'] = now  # not picked again while it runs
+                status[m['id']]['last'] = now  # not picked again while it runs
         for m in due:
             pool.submit(run_one, m, options, note)
         time.sleep(5)
@@ -345,10 +457,10 @@ def snapshot():
     out = []
     with lock:
         for m in monitors:
-            row = {'name': m['name'], 'group': m.get('group', ''), 'type': m['type'], 'machine': m.get('machine', ''),
-                   **status[m['name']]}
-            if m['type'] == 'push' and codes.get(m['name']):
-                row['push'] = f"/api/push/{codes[m['name']]}"
+            row = {'id': m['id'], 'name': m.get('name', str(m['id'])), 'group': m.get('group', ''),
+                   'type': m['type'], 'machine': m.get('machine', ''), **status[m['id']]}
+            if m['type'] == 'push' and codes.get(str(m['id'])):
+                row['push'] = f"/api/push/{codes[str(m['id'])]}"
             out.append(row)
     return out
 
@@ -367,9 +479,9 @@ def flush(now):
     with open(path, 'a', newline='', encoding='utf-8') as f:
         w = csv.writer(f)
         if new:
-            w.writerow(['time', 'name', 'ok', 'checks', 'ms'])
-        for name, (ok, checks, ms, count) in got.items():
-            w.writerow([stamp, name, ok, checks, round(ms / count) if count else ''])
+            w.writerow(['time', 'id', 'ok', 'checks', 'ms'])
+        for cid, (ok, checks, ms, count) in got.items():
+            w.writerow([stamp, cid, ok, checks, round(ms / count) if count else ''])
 
 
 def months(folder):
@@ -384,16 +496,17 @@ def tidy(note):
 
 
 def changes(days):
-    """name -> [(time, state, detail)], oldest first, reaching back at least `days` (plus the state before)."""
+    """check id -> [(time, state, detail)], oldest first, reaching back at least `days` (plus the state before)."""
     out = {}
     for f in months(EVENTS)[-(days // 28 + 2):]:
         with open(f'{EVENTS}/{f}', encoding='utf-8') as fh:
             for r in csv.DictReader(fh):
                 try:
                     t = datetime.strptime(r['time'], '%Y-%m-%d %H:%M:%S').timestamp()
+                    cid = int(r['id'])
                 except (KeyError, ValueError, TypeError):
-                    continue
-                out.setdefault(r['name'], []).append((t, r['status'], r.get('detail') or ''))
+                    continue  # a name row from before ids, or a broken line
+                out.setdefault(cid, []).append((t, r['status'], r.get('detail') or ''))
     return out
 
 
@@ -422,50 +535,59 @@ def summary():
     if now - cache.get('at', 0) < 30:
         return cache['uptime'], cache['strips']
     uptime, strips = {}, {}
-    for name, timeline in changes(366).items():
+    for cid, timeline in changes(366).items():
         u = {}
         for key, days in (('d1', 1), ('d30', 30), ('d365', 365)):
             got = spent(timeline, now - days * 86400, now)
             total = got['up'] + got['down']
             u[key] = round(100 * got['up'] / total, 2) if total else None
-        uptime[name] = u
+        uptime[cid] = u
         ticks = []
         for i in range(24):
             got = spent(timeline, now - (24 - i) * 3600, now - (23 - i) * 3600)
             ticks.append('part' if got['down'] and got['up'] else 'down' if got['down'] else 'up' if got['up']
                          else 'off' if got['off'] else '')
-        strips[name] = ticks
+        strips[cid] = ticks
     cache.update(at=now, uptime=uptime, strips=strips)
     return uptime, strips
 
 
+def label(cid):
+    """The name a check's id is shown by now, so a rename shows on its old outages too; the id if it is gone."""
+    for m in monitors:
+        if m['id'] == cid:
+            return m.get('name', str(cid))
+    return str(cid)
+
+
 def outages(days=30):
-    """Each time a check was down: name, start, end (None = still down), what it said. Newest first."""
+    """Each time a check was down: its id, its name now, start, end (None = still down), what it said. Newest first."""
     since = time.time() - days * 86400
     out = []
-    for name, timeline in changes(days).items():
+    for cid, timeline in changes(days).items():
         start = None
         for t, st, detail in timeline:
             if st == 'down' and start is None:
                 start = (t, detail)
             elif st in ('up', 'off') and start is not None:
                 if t >= since:
-                    out.append({'name': name, 'start': start[0], 'end': t, 'detail': start[1]})
+                    out.append({'id': cid, 'name': label(cid), 'start': start[0], 'end': t, 'detail': start[1]})
                 start = None
         if start is not None:
-            out.append({'name': name, 'start': start[0], 'end': None, 'detail': start[1]})
+            out.append({'id': cid, 'name': label(cid), 'start': start[0], 'end': None, 'detail': start[1]})
     return sorted(out, key=lambda o: -o['start'])
 
 
-def points(name, days, count=300):
+def points(cid, days, count=300):
     """A check's response time (ms) and share of checks passed (%), averaged into about 300 points."""
     step = max(FLUSH, days * 86400 / count)
     since = time.time() - days * 86400
     buckets = {}
+    want = str(cid)
     for f in months(CHECKS_DIR)[-(days // 28 + 2):]:
         with open(f'{CHECKS_DIR}/{f}', encoding='utf-8') as fh:
             for r in csv.DictReader(fh):
-                if r.get('name') != name:
+                if r.get('id') != want:
                     continue
                 try:
                     t = datetime.strptime(r['time'], '%Y-%m-%d %H:%M').timestamp()

@@ -167,15 +167,16 @@ function dotOf(id) {
   return quiet > status.silent_hours * 3600 ? 'quiet' : probsOf(id).length || svc.monitors.some(s => s.machine === id && s.state === 'down') ? 'bad' : '';
 }
 const checkDot = m => m.state === 'up' ? '' : m.state === 'down' ? 'bad' : m.state === 'pending' ? 'quiet' : 'wait';
-const strip = name => '<span class="strip">' + (svc.strips[name] || Array(24).fill('')).map(s => '<i class="' + s + '"></i>').join('') + '</span>';
+// A check's id is its identity (history, outages, push code); its name is only the label shown, so it can be renamed.
+const strip = id => '<span class="strip">' + (svc.strips[id] || Array(24).fill('')).map(s => '<i class="' + s + '"></i>').join('') + '</span>';
 
 // A check's row. On the main page a check that belongs to a device opens that device; anywhere else it opens the check.
 function serviceRow(m, toDevice) {
   const tip = m.state === 'up' ? 'Up' : m.state === 'waiting' ? 'Waiting for its first report' : m.state + (m.detail ? ': ' + m.detail : '');
   const dev = toDevice && m.machine && status.machines[m.machine];
-  const up = (svc.uptime[m.name] || {}).d1;
-  return '<div class="row" ' + (dev ? 'data-dev="' + esc(m.machine) : 'data-check="' + esc(m.name)) + '" title="' + esc(tip) + '">' +
-    '<span class="dot ' + checkDot(m) + '"></span><span class="n">' + esc(m.name) + '</span>' + strip(m.name) +
+  const up = (svc.uptime[m.id] || {}).d1;
+  return '<div class="row" ' + (dev ? 'data-dev="' + esc(m.machine) : 'data-check="' + esc(m.id)) + '" title="' + esc(tip) + '">' +
+    '<span class="dot ' + checkDot(m) + '"></span><span class="n">' + esc(m.name) + '</span>' + strip(m.id) +
     '<span class="u">' + (m.state === 'down' ? 'down' : m.state === 'off' ? 'off' : pct(up)) + '</span></div>';
 }
 
@@ -241,7 +242,7 @@ async function downloadLogs() {
 
 function show() {
   const [view, id] = route();
-  const ok = view === 'device' ? status.machines[id] : view === 'check' ? svc.monitors.find(m => m.name === id) : true;
+  const ok = view === 'device' ? status.machines[id] : view === 'check' ? svc.monitors.find(m => String(m.id) === id) : true;
   const v = ok ? view : 'home';
   ['home', 'device', 'check'].forEach(x => $(x).hidden = x !== v);
   if (v === 'device') device(id); else if (v === 'check') check(id); else home();
@@ -272,7 +273,7 @@ function home() {
 
 function device(id) {
   const m = status.machines[id], x = m.metrics || {}, probs = probsOf(id);
-  const mine = svc.monitors.filter(s => s.machine === id), names = new Set(mine.map(s => s.name));
+  const mine = svc.monitors.filter(s => s.machine === id), ids = new Set(mine.map(s => s.id));
   const down = mine.filter(s => s.state === 'down');
   $('dname').innerHTML = '<span class="dot ' + dotOf(id) + '"></span>' + esc(nameOf(id));
   document.title = nameOf(id) + ' - Home watch';
@@ -284,7 +285,7 @@ function device(id) {
   $('facts').innerHTML = FACTS.filter(([k]) => x[k] != null).map(([k, label, u]) => '<div>' + esc(label) + '<b>' + fmt(x[k], u) + '</b></div>').join('');
   $('dsvcwrap').hidden = !mine.length;
   $('dsvc').innerHTML = mine.map(s => serviceRow(s, false)).join('');
-  $('dout').innerHTML = outageTable(outs.filter(o => names.has(o.name) && o.start > status.now - 30 * 86400), true);
+  $('dout').innerHTML = outageTable(outs.filter(o => ids.has(o.id) && o.start > status.now - 30 * 86400), true);
   const procs = m.procs || [];
   $('dprocwrap').hidden = !procs.length;
   $('dproc').innerHTML = procs.map(([p, v]) => '<tr><td>' + esc(p) + '</td><td>' + v.toFixed(1) + '%</td></tr>').join('');
@@ -292,10 +293,10 @@ function device(id) {
   charts(['device', id], 'api/history?machine=' + encodeURIComponent(id), CHARTS, 'charts');
 }
 
-function check(name) {
-  const m = svc.monitors.find(x => x.name === name), u = svc.uptime[name] || {};
-  document.title = name + ' - Home watch';
-  $('cname').innerHTML = '<span class="dot ' + checkDot(m) + '"></span>' + esc(name);
+function check(id) {
+  const m = svc.monitors.find(x => String(x.id) === id), u = svc.uptime[id] || {};
+  document.title = m.name + ' - Home watch';
+  $('cname').innerHTML = '<span class="dot ' + checkDot(m) + '"></span>' + esc(m.name);
   const since = ago(status.now - m.since).replace(' ago', '').replace('just now', 'a moment');
   const word = {up: 'Up', down: 'Down', off: 'Off (normal for this one)', pending: 'Not answering, trying again', waiting: 'Waiting for its first report'}[m.state] || m.state;
   $('cstate').className = 'problems' + (m.state === 'down' || m.state === 'pending' ? '' : ' none');
@@ -307,10 +308,10 @@ function check(name) {
     (dev ? '<div>Device<b><a href="#' + encodeURIComponent(m.machine) + '">' + esc(nameOf(m.machine)) + '</a></b></div>' : '') +
     // A push check's path, so it can be copied into whatever reports in (the code lives in push-codes.json on the hub).
     (m.push ? '<div style="grid-column:1/-1">Push path<b><code>' + esc(m.push) + '</code></b></div>' : '');
-  $('cstrip').innerHTML = (svc.strips[name] || Array(24).fill('')).map((s, i) =>
+  $('cstrip').innerHTML = (svc.strips[id] || Array(24).fill('')).map((s, i) =>
     '<i class="' + s + '" title="' + (24 - i) + ' to ' + (23 - i) + ' h ago: ' + ({up: 'up', down: 'down', part: 'down part of the hour', off: 'off', '': 'no record'})[s] + '"></i>').join('');
-  $('cout').innerHTML = outageTable(outs.filter(o => o.name === name), false);
-  charts(['check', name], 'api/check?name=' + encodeURIComponent(name), CHECK_CHARTS, 'ccharts');
+  $('cout').innerHTML = outageTable(outs.filter(o => String(o.id) === id), false);
+  charts(['check', id], 'api/check?id=' + encodeURIComponent(id), CHECK_CHARTS, 'ccharts');
 }
 
 async function deviceLog(id) {
