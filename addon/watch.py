@@ -90,11 +90,12 @@ def machine_id(text):
 def load_settings(note=None):
     """The home's own names and numbers, from /share/home-watch/settings.json (an example is addon/settings.example.json).
 
-    Every key is optional and a missing file is the normal first run; nothing in it is secret. Read once at start:
-    machines (the page's order, and labels), limits (one machine's own numbers), log_senders (which address is which
-    machine, for the syslog trail), allowed_networks (who may post reports and open the page) and heal_script (the
-    Home Assistant script self-heal calls, {app} filled in per check)."""
-    global order, labels, limits, networks, senders, heal_script
+    Every key is optional and a missing file is the normal first run; nothing in it is secret. Read at start and again
+    after a change from the page's Machines screen, which writes the file: machines (the page's order, and labels),
+    limits (one machine's own numbers), log_senders (which address is which machine, for the syslog trail),
+    allowed_networks (who may post reports and open the page) and heal_script (the Home Assistant script self-heal
+    calls, {app} filled in per check)."""
+    global order, labels, limits, networks, heal_script
     got, read = {}, False
     try:
         with open(SETTINGS_FILE, encoding='utf-8') as f:
@@ -131,9 +132,11 @@ def load_settings(note=None):
             if clean:
                 limits[machine_id(machine)] = clean
     asked = got.get('log_senders')
-    senders = {}
+    found_senders = {}
     if isinstance(asked, dict):
-        senders = {str(ip).strip(): machine_id(m) for ip, m in asked.items() if machine_id(m)}
+        found_senders = {str(ip).strip(): machine_id(m) for ip, m in asked.items() if machine_id(m)}
+    senders.clear()  # in place: trail.listen holds this dict, so a change shows without a restart
+    senders.update(found_senders)
     asked = got.get('allowed_networks')
     networks = tuple(str(n).strip() for n in asked if str(n).strip()) if isinstance(asked, list) else ()
     if not networks:  # nothing said: the private ranges, so a typo can't lock the page out
@@ -153,6 +156,220 @@ def limit_for(machine, key):
     """One machine's own number from settings.json, else the generic one."""
     got = limits.get(machine, {}).get(key)
     return LIMITS[key] if got is None else got
+
+
+# ---- the Machines screen: the page's own editor for settings.json -------------------------------------------------
+
+MACHINE_LIMITS = tuple(LIMITS)  # the numbers a machine may have its own of: temp, mem, disk_used_pct, cpu_busy
+LIMIT_RANGES = {'temp': (1, 150), 'mem': (1, 100), 'disk_used_pct': (1, 100), 'cpu_busy': (1, 100)}
+
+
+def read_settings():
+    """settings.json as it is, every key kept, or (None, why it cannot be used). A missing file is an empty one; a
+    broken one is never overwritten, since the rest of the house's settings would go with it."""
+    try:
+        with open(SETTINGS_FILE, encoding='utf-8') as f:
+            got = json.load(f)
+    except FileNotFoundError:
+        return {}, None
+    except (OSError, ValueError) as e:
+        return None, f'settings.json cannot be read ({e}); fix it by hand first.'
+    if not isinstance(got, dict):
+        return None, 'settings.json is not a JSON object; fix it by hand first.'
+    return got, None
+
+
+def write_settings(got):
+    """Write settings.json whole (a temp file, then a rename), so a reader never sees half of it."""
+    tmp = SETTINGS_FILE + '.tmp'
+    with open(tmp, 'w', encoding='utf-8') as f:
+        f.write(json.dumps(got, indent=2) + '\n')
+    os.replace(tmp, SETTINGS_FILE)
+
+
+def listed_ids(got):
+    """The machine ids settings.json lists, in the order it lists them."""
+    listed = got.get('machines')
+    if isinstance(listed, dict):
+        return [machine_id(m) for m in listed if machine_id(m)]
+    if isinstance(listed, list):
+        return [machine_id(m) for m in listed if machine_id(m)]
+    return []
+
+
+def file_labels(got):
+    """machine id -> the label settings.json gives it (a plain list gives none)."""
+    listed = got.get('machines')
+    if not isinstance(listed, dict):
+        return {}
+    return {machine_id(m): str(label or '').strip() for m, label in listed.items() if machine_id(m)}
+
+
+def set_machines(got, ids, labels):
+    """Put the machines in the page's order, as {"<machine>": "<label>"}; a machine with no label keeps an empty one,
+    which means the name it reports."""
+    got['machines'] = {m: labels.get(m, '') for m in ids}
+
+
+def known_machines():
+    """Every machine the hub can show: the ones settings.json lists, then the ones that have reported."""
+    with lock:
+        return list(dict.fromkeys(list(order) + list(state['machines'])))
+
+
+def validate_machine(raw, known):
+    """The Machines screen's fields -> (machine, errors). `errors` maps a field to the sentence shown next to it; an
+    empty `errors` means it is ready to save. A blank limit means the generic one, so it is left out."""
+    errors = {}
+    mid = machine_id(raw.get('id'))
+    if not mid:
+        errors['id'] = 'Pick a machine.'
+    elif mid not in known:
+        errors['id'] = 'That machine has gone; reload the page.'
+    label = str(raw.get('name') or '').strip()
+    if len(label) > 60:
+        errors['name'] = 'Keep the name to 60 characters or fewer.'
+    own = {}
+    given = raw.get('limits')
+    given = given if isinstance(given, dict) else {}
+    for key in MACHINE_LIMITS:
+        value = given.get(key)
+        if value is None or str(value).strip() == '':
+            continue  # blank: the generic number, shown as the hint
+        low, high = LIMIT_RANGES[key]
+        try:
+            number = float(str(value).strip())
+        except (TypeError, ValueError):
+            number = None
+        if number is None or not low <= number <= high:
+            errors[key] = f'Use a number from {low} to {high}, or leave it blank for the default.'
+            continue
+        own[key] = int(number) if number == int(number) else round(number, 2)
+    return {'id': mid, 'label': label, 'limits': own}, errors
+
+
+def machine_row(mid):
+    """One machine as the Machines screen edits it: the id, the name it shows, its own limits and whether it reports."""
+    with lock:
+        rep = state['machines'].get(mid) or {}
+        return {'id': mid, 'name': labels.get(mid) or rep.get('name') or mid, 'label': labels.get(mid, ''),
+                'limits': dict(limits.get(mid, {})), 'reported': bool(rep), 'last': rep.get('last')}
+
+
+def machines_payload(can_edit=False):
+    """The Machines screen: every machine that has reported and every one settings.json lists, in the page's order,
+    with its shown name, its own limits, the generic limits (the form's hints) and whether this request may change
+    anything."""
+    with lock:
+        ids = list(dict.fromkeys(order))
+        ids += sorted(m for m in state['machines'] if m not in ids)
+    return {'machines': [machine_row(mid) for mid in ids], 'defaults': dict(LIMITS), 'can_edit': bool(can_edit)}
+
+
+def save_machine(raw, note=None):
+    """The Machines screen's save: a machine's shown name and its own limits. settings.json is written whole, keeping
+    every other key in it, and read back at once, so the page and the checks use the new numbers without a restart.
+    Returns (the machine as the page shows it, field -> error); the errors are empty when it was saved."""
+    note = note or (lambda text: None)
+    got, bad = read_settings()
+    if bad:
+        return None, {'id': bad}
+    found, errors = validate_machine(raw, known_machines())
+    if errors:
+        return None, errors
+    mid = found['id']
+    ids = list(dict.fromkeys(listed_ids(got)))
+    if mid not in ids:
+        ids.append(mid)  # a machine that has reported but is not listed yet goes last, and is listed from now on
+    machine_labels = file_labels(got)
+    machine_labels[mid] = found['label']
+    set_machines(got, ids, machine_labels)
+    own = got.get('limits')
+    own = dict(own) if isinstance(own, dict) else {}
+    if found['limits']:
+        own[mid] = found['limits']
+    else:
+        own.pop(mid, None)
+    if own:
+        got['limits'] = own
+    else:
+        got.pop('limits', None)
+    write_settings(got)
+    load_settings(note)
+    note(f"machine {mid}: saved")
+    return machine_row(mid), {}
+
+
+def move_machine(mid, by, note=None):
+    """Move a machine up (-1) or down (+1) in the page's order, which is settings.json's list. A machine that has
+    reported but is not listed yet joins the list where it was moved to."""
+    note = note or (lambda text: None)
+    got, bad = read_settings()
+    if bad:
+        return False
+    ids = known_machines()
+    if mid not in ids:
+        return False
+    i = ids.index(mid)
+    j = max(0, min(len(ids) - 1, i + int(by)))
+    if i == j:
+        return True
+    ids.insert(j, ids.pop(i))
+    set_machines(got, ids, file_labels(got))
+    write_settings(got)
+    load_settings(note)
+    note(f"machine {mid}: moved {'up' if j < i else 'down'}")
+    return True
+
+
+def forget_machine(mid, note=None):
+    """Forget a machine: take it out of settings.json (its place, its label, its limits, and any log sender that
+    points at it) and drop what the hub kept for it - history, programs, logs and its live state. A machine that goes
+    on reporting shows up again, with no history."""
+    note = note or (lambda text: None)
+    mid = machine_id(mid)
+    if not mid or mid not in known_machines():
+        return False
+    got, bad = read_settings()
+    if bad:
+        return False
+    changed = False
+    listed = list(dict.fromkeys(listed_ids(got)))
+    if mid in listed:
+        machine_labels = file_labels(got)
+        machine_labels.pop(mid, None)
+        set_machines(got, [m for m in listed if m != mid], machine_labels)
+        changed = True
+    own = got.get('limits')
+    if isinstance(own, dict) and mid in own:
+        own.pop(mid)
+        if not own:
+            got.pop('limits', None)
+        changed = True
+    asked = got.get('log_senders')
+    if isinstance(asked, dict):
+        left = {ip: m for ip, m in asked.items() if machine_id(m) != mid}
+        if len(left) != len(asked):
+            got['log_senders'] = left
+            changed = True
+    if changed:
+        write_settings(got)
+    for drop, what in ((history.drop, 'history'), (trail.drop, 'programs and logs')):
+        try:
+            drop(mid)
+        except OSError as e:  # a file open elsewhere: say so, and still forget the machine
+            note(f"machine {mid}: some {what} could not be removed ({e})")
+    with lock:
+        state['machines'].pop(mid, None)
+        state['raw'].pop(mid, None)
+        for key in [k for k in state['sent'] if k.startswith(f'{mid}-')]:
+            state['sent'].pop(key)
+        for key in [k for k in (state.get('problems') or {}) if k.startswith(f'{mid}-')]:
+            state['problems'].pop(key)
+    save_state()
+    load_settings(note)
+    note(f"machine {mid}: forgotten, with its stored history, programs and logs")
+    return True
 
 
 # ---- reports ----------------------------------------------------------------------------------------------------
@@ -297,8 +514,8 @@ def loop():
 
 def ingress_request(headers):
     """Whether Home Assistant's ingress proxied this request for a signed-in user. The Supervisor adds
-    X-Remote-User-Id itself and strips any copy a client sent, so only a request carrying it may change the checks;
-    the add-on's own port (and every other address) can view them but not change them."""
+    X-Remote-User-Id itself and strips any copy a client sent, so only a request carrying it may change the checks or
+    the machines; the add-on's own port (and every other address) can view them but not change them."""
     return bool(str(headers.get('X-Remote-User-Id') or '').strip())
 
 
@@ -374,17 +591,51 @@ class Handler(BaseHTTPRequestHandler):
                 note(f"bad report from {self.client_address[0]}: {e}")
                 self.reply(400, {'error': str(e)})
             return
-        if len(parts) >= 3 and parts[-3] == 'api' and parts[-2] == 'checks':
-            # The Checks screen changes the list. Only Home Assistant's ingress may: that is the signed-in panel.
+        if len(parts) >= 3 and parts[-3] == 'api' and parts[-2] in ('checks', 'machines'):
+            # The Checks and Machines screens change the add-on's own files. Only Home Assistant's ingress may: that is
+            # the signed-in panel.
             if not ingress_request(self.headers):
-                return self.reply(403, {'error': 'Checks can only be changed from the Home Assistant panel.'})
+                return self.reply(403, {'error': f'{parts[-2].title()} can only be changed from the Home Assistant panel.'})
+            body = self.json_body()
+            if body is None:
+                return
+            if parts[-2] == 'checks':
+                return self.check_change(last, body)
+            return self.machine_change(last, body)
+        return self.reply(404, {'error': 'no'})
+
+    def json_body(self):
+        """The POSTed JSON object, or None after answering why it cannot be used."""
+        try:
+            got = json.loads(self.body() or b'{}')
+        except ValueError as e:
+            self.reply(400, {'error': f'bad JSON: {e}'})
+            return None
+        if not isinstance(got, dict):
+            self.reply(400, {'error': 'send a JSON object'})
+            return None
+        return got
+
+    def machine_change(self, action, body):
+        """One change from the Machines screen: save (rename and limits), move up/down, or forget."""
+        mid = machine_id(body.get('id'))
+        if action == 'save':
+            row, errors = save_machine(body, note)
+            if errors:
+                return self.reply(400, {'error': 'Please fix the fields marked.', 'fields': errors})
+            return self.reply(200, {'ok': True, 'machine': row})
+        if action == 'move':
             try:
-                body = json.loads(self.body() or b'{}')
-            except ValueError as e:
-                return self.reply(400, {'error': f'bad JSON: {e}'})
-            if not isinstance(body, dict):
-                return self.reply(400, {'error': 'send a JSON object'})
-            return self.check_change(last, body)
+                by = int(body.get('by', 0))
+            except (TypeError, ValueError):
+                by = 0
+            if not mid or by not in (-1, 1) or not move_machine(mid, by, note):
+                return self.reply(404, {'error': 'No such machine.'})
+            return self.reply(200, {'ok': True})
+        if action == 'forget':
+            if not mid or not forget_machine(mid, note):
+                return self.reply(404, {'error': 'No such machine.'})
+            return self.reply(200, {'ok': True})
         return self.reply(404, {'error': 'no'})
 
     def check_change(self, action, body):
@@ -445,6 +696,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply(200, {'monitors': services.snapshot(), 'uptime': uptime, 'strips': strips})
         if last == 'checks':
             return self.reply(200, checks_payload(ingress_request(self.headers)))
+        if last == 'machines':
+            return self.reply(200, machines_payload(ingress_request(self.headers)))
         if last == 'logs':
             return self.reply(200, {'logs': log_rows()})
         if last in ('check', 'outages', 'history'):

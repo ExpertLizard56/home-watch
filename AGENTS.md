@@ -23,8 +23,8 @@ That base image is published for aarch64, amd64 and armv7, which is why `config.
   event and per-check CSVs, uptime/strips/outages, the push codes and self-heal.
 - `trail.py` — the busiest programs every Linux report carries, the syslog lines machines send in, and the range the
   page's Logs section downloads (a `.log` for one machine, a `.zip` of one each for several).
-- `page.html` — the page: one file, plain SVG, no libraries. Four views (everything, one machine, one check, the checks
-  editor), routed by the URL fragment (`#<machine>`, `#check:<id>`, `#checks:`).
+- `page.html` — the page: one file, plain SVG, no libraries. Five views (everything, one machine, one check, the checks
+  editor, the machines editor), routed by the URL fragment (`#<machine>`, `#check:<id>`, `#checks:`, `#machines:`).
 - `config.yaml` — the add-on's metadata and its few options (see version bumps). `settings.example.json` and
   `monitors.json` are generic examples; `services.py` copies `monitors.json` into a data folder that has no check list
   yet, and never over one that is already there.
@@ -72,8 +72,10 @@ Once a day the add-on drops the months each folder does not keep.
 
 ### Settings
 
-`/share/home-watch/settings.json` is read when the add-on starts (restart after editing). Every key is optional, so a
-missing file is normal and the defaults below hold; `settings.example.json` shows the shape with made-up values.
+`/share/home-watch/settings.json` is read when the add-on starts and again after every change from the page's Machines
+screen, which writes it (so a save needs no restart). Every key is optional, so a missing file is normal and the
+defaults below hold; `settings.example.json` shows the shape with made-up values. Hand-editing it and restarting still
+works.
 
 - `machines` — `{"<machine>": "<label>"}` or a plain `["<machine>", ...]`: the order the page shows machines in, and
   the names it shows them by. A machine that reports without being listed still shows, after the listed ones.
@@ -136,6 +138,22 @@ rows in `services/` and `checks/`, and keeps its number in `removed-ids.json`. A
 status instead of any 200-299. On start, a `heal` check with no `app` gets its name's slug written in as `app`, so a
 later rename still calls the same self-heal script.
 
+### The Machines screen
+
+`GET /api/machines` gives the page every machine that has reported and every one `settings.json` lists, in the page's
+order: its id, the name it shows, its own limits, the generic `LIMITS` (the form's hints) and whether the request may
+change anything. The changes are `POST /api/machines/save` (a shown name and the four limits), `/move` (by -1/+1) and
+`/forget`, all refused (403) unless the request carries `X-Remote-User-Id`, the same rule as the Checks screen.
+`watch.validate_machine` checks the fields and returns field -> a sentence; `watch.save_machine` writes `settings.json`
+whole (a temp file, then a rename), keeping every other key in it, and reads it back at once, so the page, the limits
+and the alerts use the new numbers without a restart. A blank limit is left out of the file, which means the generic
+one; a machine that reported but is not listed joins the list at the end on its first save, or where it was moved to.
+A `settings.json`
+that cannot be read is never overwritten: the form says to fix it by hand first. `watch.forget_machine` takes the
+machine out of `machines`, `limits` and any `log_senders` entry pointing at it, drops its history, programs and logs
+(`history.drop`, `trail.drop`) and its live state, then saves the state. A machine that goes on reporting shows up again,
+with no history. Service checks that name it are left alone (remove them on the Checks screen).
+
 ### Push codes
 
 The codes are **not** in `monitors.json`: that list is a plain file anyone may copy or commit, and a code in it would be
@@ -179,7 +197,8 @@ with no date keep the date of the line above them. One machine comes back as a `
 
 `GET /` serves `page.html`; every other GET is one of `/api/status` (state, order, labels), `/api/services` (each
 check, its id, its uptime and its 24-hour strip), `/api/checks` (the Checks screen: every check as the form edits it,
-the groups, the machines and whether this request may change anything), `/api/history?machine=&days=`,
+the groups, the machines and whether this request may change anything), `/api/machines` (the Machines screen: every
+machine with its shown name, its own limits and the generic ones), `/api/history?machine=&days=`,
 `/api/check?id=&days=`, `/api/outages?days=`, `/api/log?machine=`, `/api/logs` (the machines with saved syslog files,
 plus the hub's own log) and `/api/logs/download?machines=&days=`, which answers as an attachment: a `.log`, or a `.zip`
 for several, with `days` 0 meaning everything kept. Only the names `/api/logs` itself listed are accepted, so no path
@@ -187,9 +206,10 @@ comes from the page. Days are clamped to 1-366 (log ranges to 0-366) and the gra
 so a year draws as fast as a day. Both doors — the reports and the page — refuse any address that does not start with
 one of `allowed_networks`. The page also answers on Home Assistant's ingress, so it can sit in the sidebar.
 
-The Checks screen's four changes are `POST /api/checks/save`, `/remove`, `/move` and `/code`. They are refused (403)
-unless the request carries `X-Remote-User-Id`, the header the Supervisor adds to an ingress request and strips from any
-copy a client sent; so the add-on's own port is read-only, and only the signed-in panel can change a check.
+The Checks screen's four changes are `POST /api/checks/save`, `/remove`, `/move` and `/code`; the Machines screen's
+three are `/api/machines/save`, `/move` and `/forget`. All seven are refused (403) unless the request carries
+`X-Remote-User-Id`, the header the Supervisor adds to an ingress request and strips from any copy a client sent; so the
+add-on's own port is read-only, and only the signed-in panel can change a check or a machine.
 
 ## The checks
 
@@ -236,14 +256,17 @@ logged and skipped; the rest of the add-on must still work. A reporter can also 
 - `lefthook.yml` runs on every commit: gitleaks (refuses a commit whose new lines hold a password, token or key — this
   repo is public) and ruff on the staged Python. A fresh checkout needs `lefthook install` once. A refused commit means
   fix what it printed; never skip it (`--no-verify`, `LEFTHOOK=0`).
-- `cd addon && python -m unittest test_logs test_services` — two test files: `test_logs` for the Logs section's range
-  cut and its `.log` / `.zip`, `test_services` for the checks' ids (the upgrade, history and codes moving to the id, a
-  rename, a duplicate id, a second start changing nothing), for a machine check with and without a `host` (its three
-  states, retries, and the ping time as its response time), for the Checks screen's validation, save, reorder and remove
-  (the id tombstone and the dropped history), for the self-heal `app` that survives a rename, and for the API's
-  ingress-only rule (the same list served read-only over the LAN, a change refused without `X-Remote-User-Id`). Both use
-  a temporary data folder, so they need nothing else. Otherwise the cheapest proof of a change is ruff plus the local
-  run above: start it on an empty data folder, post a report, fetch `/api/status`, `/api/services` and one graph.
+- `cd addon && python -m unittest test_logs test_machines test_services` — three test files: `test_logs` for the Logs
+  section's range cut and its `.log` / `.zip`; `test_machines` for the Machines screen's validation, save (the name,
+  the limits, every other key kept, a blank limit meaning the default), move and forget (its settings entry, history,
+  programs, logs and state dropped), a broken settings file left alone, and the same ingress-only rule; `test_services`
+  for the checks' ids (the upgrade, history and codes moving to the id, a rename, a duplicate id, a second start changing
+  nothing), for a machine check with and without a `host` (its three states, retries, and the ping time as its response
+  time), for the Checks screen's validation, save, reorder and remove (the id tombstone and the dropped history), for
+  the self-heal `app` that survives a rename, and for the API's ingress-only rule (the same list served read-only over
+  the LAN, a change refused without `X-Remote-User-Id`). All three use a temporary data folder, so they need nothing
+  else. Otherwise the cheapest proof of a change is ruff plus the local run above: start it on an empty data folder,
+  post a report, fetch `/api/status`, `/api/services` and one graph.
   `python -m py_compile addon/*.py` catches a file
   that will not even import, and if `page.html`'s script changed, `node --check` the script on its own (it is one
   `<script>` block, and the page has no build step).

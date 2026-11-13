@@ -234,6 +234,13 @@ def download(names, days=0, now=None):
     return f'home-watch-logs-{day}.zip', buf.getvalue(), 'application/zip'
 
 
+def drop(machine):
+    """Remove everything kept for a machine - its programs and its logs, every month (the Machines screen's Forget)."""
+    for folder in (PROGRAMS, LOGS):
+        for path in glob.glob(f"{folder}/{glob.escape(machine)} *.*"):
+            os.remove(path)
+
+
 def tidy(note):
     for folder, months in KEEP.items():
         by_machine = {}

@@ -4,9 +4,10 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Home watch</title>
-<!-- Three views: everything at a glance, one device's page (click its card or one of its checks), and one check's page
-     (click a check on a device's page, or one with no device). One card per machine is Beszel's layout (MIT); the
-     hour-by-hour strip, 24 h / 30 day / year uptime and outage list are Uptime Kuma's (MIT). Plain SVG, no libraries. -->
+<!-- Five views: everything at a glance, one device's page (click its card or one of its checks), one check's page
+     (click a check on a device's page, or one with no device), and the Checks and Machines screens that edit the add-on's
+     own lists. One card per machine is Beszel's layout (MIT); the hour-by-hour strip, 24 h / 30 day / year uptime and
+     outage list are Uptime Kuma's (MIT). Plain SVG, no libraries. -->
 <style>
 :root { --bg:#f6f7f9; --card:#fff; --text:#1d2330; --dim:#6b7280; --line:#e3e6eb; --ok:#1f9d55; --bad:#d64545; --warn:#c98a00;
         --c1:#2f6fde; --c2:#e07a1f; --c3:#8a4fd8; --hover:#eef2fb; --none:#eceef1; }
@@ -107,7 +108,7 @@ pre.log { margin:0; font:12px/1.45 ui-monospace, Consolas, monospace; white-spac
 <body>
 <main>
 <div id="home">
-  <header><h1>Home watch</h1><button class="back" id="gochecks">Checks</button></header>
+  <header><h1>Home watch</h1><button class="back" id="gomachines">Machines</button><button class="back" id="gochecks">Checks</button></header>
   <div id="problems" class="problems none">Loading...</div>
   <h2 class="sec">Devices</h2>
   <div id="grid" class="grid"></div>
@@ -233,6 +234,49 @@ pre.log { margin:0; font:12px/1.45 ui-monospace, Consolas, monospace; white-spac
   -d '{"machine":"example","name":"Example machine","kind":"linux","metrics":{"cpu":12.5,"mem":40},"counters":{},"cpu_ticks":[1000,500],"problems":{}}'</pre>
   </details>
 </div>
+<div id="machines" hidden>
+  <header><button class="back">&#8249; Back</button><h1>Machines</h1></header>
+  <div id="mmsg" class="problems none" hidden></div>
+  <div class="panel" id="mlist"><span class="empty">Loading...</span></div>
+  <div id="mformwrap" hidden>
+    <h2 class="sec" id="mformtitle">Edit machine</h2>
+    <form id="mform" class="panel form" novalidate>
+      <input type="hidden" id="mf_id">
+      <label id="ml_name">Shown name
+        <input type="text" id="mf_name" maxlength="60" autocomplete="off" placeholder="Workstation">
+        <span class="hint">What the page calls it. Blank = the name the machine reports.</span>
+        <span class="err" id="me_name"></span>
+      </label>
+      <div class="two">
+        <label id="ml_temp">Temperature limit (C)
+          <input type="number" id="mf_temp" min="1" max="150" step="any">
+          <span class="hint" id="mh_temp"></span>
+          <span class="err" id="me_temp"></span>
+        </label>
+        <label id="ml_mem">Memory limit (%)
+          <input type="number" id="mf_mem" min="1" max="100" step="any">
+          <span class="hint" id="mh_mem"></span>
+          <span class="err" id="me_mem"></span>
+        </label>
+      </div>
+      <div class="two">
+        <label id="ml_disk_used_pct">Disk space limit (%)
+          <input type="number" id="mf_disk_used_pct" min="1" max="100" step="any">
+          <span class="hint" id="mh_disk_used_pct"></span>
+          <span class="err" id="me_disk_used_pct"></span>
+        </label>
+        <label id="ml_cpu_busy">CPU busy limit (%)
+          <input type="number" id="mf_cpu_busy" min="1" max="100" step="any">
+          <span class="hint" id="mh_cpu_busy"></span>
+          <span class="err" id="me_cpu_busy"></span>
+        </label>
+      </div>
+      <span class="hint">Leave a limit blank to use the default. Memory and CPU count only when over the limit for an hour.</span>
+      <div class="formbar"><button type="submit" class="primary" id="msave">Save machine</button>
+        <button type="button" id="mcancel">Cancel</button></div>
+    </form>
+  </div>
+</div>
 
 <datalist id="cgrouplist"></datalist>
 <datalist id="cmachinelist"></datalist>
@@ -290,6 +334,7 @@ const LOG_RANGES = [['1', 'Today'], ['3', 'Last 3 days'], ['7', 'Last 7 days'], 
 let days = 1, status = null, svc = null, outs = [], inside = false;
 let lg = {logs: []}, logPick = new Set(), logDays = '1';
 let chk = null, chkEditing = false, draft = {}, pushId = null;
+let mach = null, machEditing = false, machLoading = false;
 const $ = id => document.getElementById(id);
 const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const ago = s => s < 120 ? 'just now' : s < 7200 ? Math.round(s/60) + ' min ago' : s < 172800 ? Math.round(s/3600) + ' h ago' : Math.round(s/86400) + ' days ago';
@@ -300,12 +345,14 @@ const upFor = h => h == null ? '-' : h < 48 ? fmt(h, ' h') : fmt(h / 24, ' days'
 const when = t => new Date(t * 1000).toLocaleString([], {weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit'});
 const route = () => {
   const h = decodeURIComponent(location.hash.slice(1));
-  return h === 'checks:' ? ['checks', ''] : h.startsWith('check:') ? ['check', h.slice(6)] : h ? ['device', h] : ['home', ''];
+  return h === 'checks:' ? ['checks', ''] : h === 'machines:' ? ['machines', ''] :
+    h.startsWith('check:') ? ['check', h.slice(6)] : h ? ['device', h] : ['home', ''];
 };
 const probsOf = id => Object.entries(status.problems || {}).filter(([k]) => k.startsWith(id + '-'));
 const go = (view, id) => {
   inside = true;
-  location.hash = view === 'checks' ? 'checks:' : view === 'check' ? 'check:' + encodeURIComponent(id) : encodeURIComponent(id);
+  location.hash = view === 'checks' ? 'checks:' : view === 'machines' ? 'machines:' :
+    view === 'check' ? 'check:' + encodeURIComponent(id) : encodeURIComponent(id);
   window.scrollTo(0, 0);
 };
 // The order and the names come from settings.json on the hub (machines); anything it doesn't name goes last, by id.
@@ -341,6 +388,7 @@ async function load() {
   [status, svc, outs, lg] = await Promise.all(['api/status', 'api/services', 'api/outages?days=365', 'api/logs'].map(u => fetch(u).then(r => r.json())));
   show();
   if (route()[0] === 'checks' && !chkEditing) loadChecks();
+  if (route()[0] === 'machines' && !machEditing) loadMachines();
 }
 
 // The Logs section: tick All or some machines, pick how far back, download. The hub cuts by each line's own time and
@@ -395,8 +443,9 @@ function show() {
   const [view, id] = route();
   const ok = view === 'device' ? status.machines[id] : view === 'check' ? svc.monitors.find(m => String(m.id) === id) : true;
   const v = ok ? view : 'home';
-  ['home', 'device', 'check', 'checks'].forEach(x => $(x).hidden = x !== v);
-  if (v === 'device') device(id); else if (v === 'check') check(id); else if (v === 'checks') checksView(); else home();
+  ['home', 'device', 'check', 'checks', 'machines'].forEach(x => $(x).hidden = x !== v);
+  if (v === 'device') device(id); else if (v === 'check') check(id); else if (v === 'checks') checksView();
+  else if (v === 'machines') machinesView(); else home();
 }
 
 // ---- the Checks screen -------------------------------------------------------------------------------------------
@@ -643,6 +692,154 @@ async function newCode() {
   message('A new code is in place; the old push URL no longer works.', false);
 }
 
+// ---- the Machines screen -----------------------------------------------------------------------------------------
+// Every machine that has reported and every one settings.json lists, in the page's order. Saving writes settings.json
+// on the hub (every other key in it is kept) and the hub picks it up at once; forgetting drops a machine's stored data.
+const LIMIT_FIELDS = [['temp', 'temp', ' C', 150], ['mem', 'memory', '%', 100],
+  ['disk_used_pct', 'disk', '%', 100], ['cpu_busy', 'CPU', '%', 100]];
+
+function machinesView() {
+  if (machEditing) return;
+  if (!mach) { loadMachines(); return; }
+  renderMachines();
+}
+
+async function loadMachines() {
+  if (machLoading) return;
+  machLoading = true;
+  try {
+    const r = await fetch('api/machines');
+    if (!r.ok) throw new Error('the hub answered ' + r.status);
+    mach = await r.json();
+    if (!machEditing) renderMachines();
+  } catch (e) {
+    $('mlist').innerHTML = '<span class="empty">Could not load the machines: ' + esc(e.message) + '</span>';
+  }
+  machLoading = false;
+}
+
+function mmessage(text, bad) {
+  const el = $('mmsg');
+  el.hidden = !text;
+  el.className = 'problems' + (bad ? '' : ' none');
+  el.textContent = text || '';
+}
+
+const defaultHint = key => {
+  const v = mach && mach.defaults ? mach.defaults[key] : null;
+  return 'Default: ' + (v == null ? 'off' : v + (key === 'temp' ? ' C' : '%'));
+};
+const limitsLine = m => Object.entries(m.limits || {}).map(([key, v]) => {
+  const f = LIMIT_FIELDS.find(x => x[0] === key);
+  return (f ? f[1] : key) + ' ' + (+v) + (f ? f[2] : '');
+}).join(', ') || 'default limits';
+
+function renderMachines() {
+  const can = !!(mach && mach.can_edit), list = (mach && mach.machines) || [];
+  if (!can) mmessage('Viewing only: changing machines is allowed through Home Assistant\'s panel (the sidebar), which is signed in.', false);
+  if (!list.length) {
+    $('mlist').innerHTML = '<span class="empty">No machines yet. One shows here as soon as it reports.</span>';
+    return;
+  }
+  $('mlist').innerHTML = list.map((m, i) =>
+    '<div class="chk"><span class="dot ' + (m.reported ? dotOf(m.id) : 'wait') + '"></span>' +
+    '<span class="n"><b>' + esc(m.name) + '</b><small>' + esc(m.id) + ' &middot; ' +
+    (m.reported ? 'last report ' + ago(status.now - m.last) : 'has not reported yet') + ' &middot; ' +
+    esc(limitsLine(m)) + '</small></span>' +
+    (can ? '<button type="button" data-mup="' + esc(m.id) + '"' + (i === 0 ? ' disabled' : '') + ' title="Move up">&#8593;</button>' +
+      '<button type="button" data-mdown="' + esc(m.id) + '"' + (i === list.length - 1 ? ' disabled' : '') + ' title="Move down">&#8595;</button>' +
+      '<button type="button" data-medit="' + esc(m.id) + '">Edit</button>' +
+      '<button type="button" class="danger" data-mforget="' + esc(m.id) + '">Forget</button>' : '') +
+    '</div>').join('');
+}
+
+function openMachine(m) {
+  machEditing = true;
+  $('mf_id').value = m.id;
+  $('mformtitle').textContent = 'Edit ' + m.name;
+  $('mf_name').value = m.label || '';
+  LIMIT_FIELDS.forEach(([key]) => {
+    $('mf_' + key).value = m.limits && m.limits[key] != null ? +m.limits[key] : '';
+    $('mh_' + key).textContent = defaultHint(key);
+  });
+  clearMachineErrors();
+  mmessage('', false);
+  $('mformwrap').hidden = false;
+  $('mf_name').focus();
+}
+
+function clearMachineErrors() {
+  document.querySelectorAll('#mform .err').forEach(e => { e.textContent = ''; });
+  document.querySelectorAll('#mform label.bad').forEach(l => l.classList.remove('bad'));
+}
+
+function showMachineErrors(errors) {
+  clearMachineErrors();
+  Object.entries(errors || {}).forEach(([key, msg]) => {
+    const e = $('me_' + key);
+    if (!e) return;
+    e.textContent = msg;
+    const label = e.closest('label');
+    if (label) label.classList.add('bad');
+  });
+}
+
+function machineErrors() {
+  const errors = {};
+  if ($('mf_name').value.trim().length > 60) errors.name = 'Keep the name to 60 characters or fewer.';
+  LIMIT_FIELDS.forEach(([key, , , high]) => {
+    const raw = $('mf_' + key).value.trim();
+    if (raw === '') return;
+    const n = Number(raw);
+    if (!isFinite(n) || n < 1 || n > high) errors[key] = 'Use a number from 1 to ' + high + ', or leave it blank for the default.';
+  });
+  return errors;
+}
+
+async function saveMachine(e) {
+  e.preventDefault();
+  const errors = machineErrors();
+  if (Object.keys(errors).length) { showMachineErrors(errors); mmessage('Please fix the fields marked.', true); return; }
+  const payload = {id: $('mf_id').value, name: $('mf_name').value.trim(), limits: {}};
+  LIMIT_FIELDS.forEach(([key]) => {
+    const raw = $('mf_' + key).value.trim();
+    if (raw !== '') payload.limits[key] = raw;
+  });
+  const r = await fetch('api/machines/save', {method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(payload)});
+  const got = await r.json().catch(() => ({}));
+  if (!r.ok) {
+    showMachineErrors(got.fields || {});
+    mmessage(got.fields && got.fields.id ? got.fields.id : got.error || 'The hub refused the change.', true);
+    return;
+  }
+  machEditing = false;
+  $('mformwrap').hidden = true;
+  clearMachineErrors();
+  await load();
+  await loadMachines();
+  mmessage('Saved.', false);
+}
+
+async function moveMachine(id, by) {
+  const r = await fetch('api/machines/move', {method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({id, by})});
+  if (!r.ok) { mmessage('Could not move that machine.', true); return; }
+  await load();
+  await loadMachines();
+}
+
+async function forgetMachine(id) {
+  const m = ((mach && mach.machines) || []).find(x => x.id === id);
+  if (!confirm('Forget "' + (m ? m.name : 'this machine') + '"? Its stored history, programs and logs are deleted.')) return;
+  const r = await fetch('api/machines/forget', {method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({id})});
+  if (!r.ok) { mmessage('Could not forget that machine.', true); return; }
+  await load();
+  await loadMachines();
+  mmessage('Forgot' + (m ? ' ' + m.name : '') + '.', false);
+}
+
 function home() {
   document.title = 'Home watch';
   const down = svc.monitors.filter(m => m.state === 'down');
@@ -757,6 +954,17 @@ document.querySelectorAll('.back').forEach(b => b.onclick = () => { if (inside) 
 // The Checks screen's own controls go after the generic Back handler, so they win over it.
 $('f_type').innerHTML = TYPE_LIST.map(([v, t]) => '<option value="' + v + '">' + t + '</option>').join('');
 $('gochecks').onclick = () => go('checks', '');
+$('gomachines').onclick = () => go('machines', '');
+$('mform').onsubmit = saveMachine;
+$('mcancel').onclick = () => { machEditing = false; $('mformwrap').hidden = true; clearMachineErrors(); mmessage('', false); };
+$('mlist').onclick = e => {
+  const b = e.target.closest('button');
+  if (!b) return;
+  if (b.dataset.mup) moveMachine(b.dataset.mup, -1);
+  else if (b.dataset.mdown) moveMachine(b.dataset.mdown, 1);
+  else if (b.dataset.medit) openMachine(((mach && mach.machines) || []).find(x => x.id === b.dataset.medit));
+  else if (b.dataset.mforget) forgetMachine(b.dataset.mforget);
+};
 $('cadd').onclick = () => openForm(null);
 $('ccancel').onclick = () => { chkEditing = false; $('cformwrap').hidden = true; clearErrors(); message('', false); };
 $('f_heal').onchange = () => { $('l_app').hidden = !$('f_heal').checked; };
@@ -785,6 +993,7 @@ $('clist').onclick = e => {
 window.addEventListener('hashchange', () => {
   $('charts').innerHTML = $('ccharts').innerHTML = '';
   if (route()[0] !== 'checks') { chkEditing = false; $('cformwrap').hidden = true; }
+  if (route()[0] !== 'machines') { machEditing = false; $('mformwrap').hidden = true; }
   if (status) show();
 });
 document.querySelectorAll('.ranges button').forEach(b => b.onclick = () => {

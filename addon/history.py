@@ -80,6 +80,12 @@ def points(machine, days, count=300):
     return {'t': [int(k * step) for k in keys], 'series': series}
 
 
+def drop(machine):
+    """Remove a machine's whole history: every month of its CSV (the Machines screen's Forget)."""
+    for path in glob.glob(f"{HISTORY}/{glob.escape(machine)} *.csv"):
+        os.remove(path)
+
+
 def tidy(note):
     """Keeps the newest 12 months of each machine."""
     by_machine = {}

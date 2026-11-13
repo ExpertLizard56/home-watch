@@ -20,6 +20,8 @@ Assistant, and sends an alert through a webhook. It needs no cloud account and n
 - A **Checks** screen to add, change, reorder and remove service checks without a restart: ping, TCP port, HTTP, DNS, a
   dynamic-DNS name still matching your public IP, "one of my machines reported lately" (and, given its address, still on
   the network), and push checks (see below). The list is still a plain JSON file if you prefer to edit it by hand.
+- A **Machines** screen to name the machines, put them in the order the page shows, give one its own alert limits, and
+  forget one (with its stored data), all without editing a file or restarting.
 
 Everything is kept in `/share/home-watch` as plain files: a CSV history per machine (one row every 5 minutes, 12 months
 kept), the check list, the settings, and a log.
@@ -59,8 +61,8 @@ automation:
 Leave it empty and alerts are only written to the add-on's log. `silent_hours` (6 by default) is how long a machine may
 stay quiet before that counts as a problem.
 
-**`/share/home-watch/settings.json`** is where your own names and numbers go. Every key is optional, so a missing file
-is normal; it is read when the add-on starts, so restart the add-on after editing.
+**`/share/home-watch/settings.json`** is where your own names and numbers go. The page's **Machines** screen (below)
+writes it for you; every key is optional, so a missing file is normal, and editing it by hand and restarting still works.
 
 ```json
 {
@@ -134,6 +136,21 @@ Changing checks is only allowed from Home Assistant's panel (the sidebar), becau
 on port 8790 still shows everything, but refuses a change. Saving writes `monitors.json` at once and the running checks
 pick it up without a restart; the hidden `id` of an edited check is kept, and a new check gets a new one that is never
 reused.
+
+## The Machines screen
+
+Open **Machines** on the page (next to **Checks**). It lists every machine that has reported and every one
+`settings.json` lists, in the order the page shows:
+
+- move a machine up or down, or edit it to change the name the page calls it and its own `temp`, `mem`,
+  `disk_used_pct` or `cpu_busy` limit. A blank limit means the generic one, shown under the field;
+- forget a machine: it asks first, then drops its stored history, programs and logs and its entry in `settings.json`.
+  A machine that keeps reporting shows up again, with no history;
+- saving writes `settings.json` at once (every other key in it is kept), so the page and the alerts use the new name
+  and numbers without a restart.
+
+Like the Checks screen, changing machines is only allowed through Home Assistant's panel; port 8790 shows the list but
+refuses a change.
 
 ## Reporters
 
