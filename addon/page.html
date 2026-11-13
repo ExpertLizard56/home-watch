@@ -303,7 +303,8 @@ function check(id) {
   $('cstate').innerHTML = '<b>' + esc(word) + '</b>' + (m.detail ? ': ' + esc(m.detail) : '') + (m.state === 'waiting' ? '' : ', for ' + since);
   const dev = m.machine && status.machines[m.machine];
   $('cfacts').innerHTML = [['Up, last 24 h', pct(u.d1)], ['Up, last 30 days', pct(u.d30)], ['Up, last year', pct(u.d365)],
-    ['Last response', m.ms ? m.ms + ' ms' : '-'], ['What it checks', TYPES[m.type] || m.type], ['Group', m.group || '-']]
+    ['Last response', m.ms ? m.ms + ' ms' : '-'], ['What it checks', TYPES[m.type] || m.type], ['Group', m.group || '-'],
+    ...(m.host ? [['Address', m.host]] : [])]
     .map(([k, v]) => '<div>' + esc(k) + '<b>' + esc(v) + '</b></div>').join('') +
     (dev ? '<div>Device<b><a href="#' + encodeURIComponent(m.machine) + '">' + esc(nameOf(m.machine)) + '</a></b></div>' : '') +
     // A push check's path, so it can be copied into whatever reports in (the code lives in push-codes.json on the hub).

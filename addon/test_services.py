@@ -1,8 +1,10 @@
-"""Tests for the service checks' ids: the upgrade that gives every check one, and what it moves with it.
+"""Tests for the service checks: the ids the upgrade gives every check (and what it moves with it), and a machine
+check with and without a host.
 
 Run from addon/: `python -m unittest test_services`. Everything happens in a temporary data folder, made before
 services is imported (it reads HOME_WATCH_DATA then); each test gets its own folder under it and points the module's
-paths at it, so nothing here needs Home Assistant, a network or a real install.
+paths at it, so nothing here needs Home Assistant, a network or a real install. A machine check's ping is stubbed out,
+so the host states are tested without a device on the network.
 """
 
 import json
@@ -11,6 +13,7 @@ import tempfile
 import time
 import unittest
 from datetime import datetime, timedelta
+from unittest import mock
 
 DATA = tempfile.mkdtemp(prefix='home-watch-services-test-')
 os.environ['HOME_WATCH_DATA'] = DATA
@@ -36,6 +39,7 @@ class Checks(unittest.TestCase):
         services.samples.clear()
         services.cache.clear()
         services.codes = {}
+        services.machine = None
         self.notes = []
 
     def note(self, text):
@@ -170,6 +174,60 @@ class Checks(unittest.TestCase):
         self.write_list([{'name': 'A new check', **PING}])
         services.load(self.note)
         self.assertEqual(services.monitors[0]['id'], 10)
+
+    # ---- a machine check: with no host it only watches the reports; with one it also pings the address ----
+
+    def reported(self, ago, problems=None):
+        """What services.machine hands back for a machine's report, `ago` seconds old."""
+        services.machine = lambda mid: {'last': time.time() - ago, 'problems': problems or {}}
+
+    def machine_check(self, **extra):
+        return {'id': 1, 'type': 'machine', 'machine': 'pc', 'quiet': 900, **extra}
+
+    def test_a_machine_check_without_a_host_only_watches_its_reports(self):
+        self.reported(60)
+        self.assertEqual(services.check_machine(self.machine_check()), (True, '', 0))
+        self.reported(3600)
+        ok, detail, ms = services.check_machine(self.machine_check())
+        self.assertFalse(ok)
+        self.assertEqual(detail, 'no report for 60 min')
+        self.assertEqual(ms, 0)                       # nothing was pinged, so there is no response time
+
+    def test_a_machine_check_with_a_host_is_down_when_the_host_does_not_answer(self):
+        self.reported(60)                             # the reporter is fine: the address is what fails
+        with mock.patch.object(services, 'check_ping', return_value=(False, 'no answer', 3010.5)) as ping:
+            got = services.check_machine(self.machine_check(host='192.0.2.1'))
+        self.assertEqual(got, (False, 'Not on the network', 3010.5))
+        self.assertEqual(ping.call_args[0][0]['host'], '192.0.2.1')  # pinged the check's own address
+
+    def test_a_machine_check_with_a_host_is_down_when_only_its_reporter_stopped(self):
+        self.reported(3600)                           # the address answers, the report is stale
+        with mock.patch.object(services, 'check_ping', return_value=(True, '', 4.5)):
+            got = services.check_machine(self.machine_check(host='192.0.2.1'))
+        self.assertEqual(got, (False, 'On the network, but its reporter stopped sending', 4.5))
+
+    def test_a_machine_check_with_a_host_is_up_when_both_are_fine(self):
+        self.reported(60)
+        with mock.patch.object(services, 'check_ping', return_value=(True, '', 4.5)):
+            got = services.check_machine(self.machine_check(host='192.0.2.1'))
+        self.assertEqual(got, (True, '', 4.5))         # the response time is the ping's
+        self.reported(60, {'drive': 'Drive health is bad'})  # a problem in the report still counts
+        with mock.patch.object(services, 'check_ping', return_value=(True, '', 4.5)):
+            got = services.check_machine(self.machine_check(host='192.0.2.1'))
+        self.assertEqual(got, (False, 'Drive health is bad', 4.5))
+
+    def test_a_machine_check_with_a_host_waits_out_its_retries_before_down(self):
+        self.write_list([{'name': 'Workstation', 'type': 'machine', 'machine': 'pc', 'host': '192.0.2.1',
+                          'quiet': 900, 'every': 60, 'retries': 2}])
+        services.load(self.note)
+        self.reported(60)
+        self.assertEqual(services.snapshot()[0]['host'], '192.0.2.1')  # so the check's page can show the address
+        with mock.patch.object(services, 'check_ping', return_value=(False, 'no answer', 3000.0)):
+            for expected in ('pending', 'pending', 'down'):
+                services.run_one(services.monitors[0], {}, self.note)
+                self.assertEqual(services.status[1]['state'], expected)
+                self.assertEqual(services.status[1]['detail'], 'Not on the network')
+        self.assertEqual(services.status[1]['ms'], 3000)  # and the check's page shows the ping time
 
 
 if __name__ == '__main__':

@@ -100,7 +100,10 @@ runs), `retries` (failures in a row before it counts as down) and whatever its t
   name resolves to. It never touches whatever updates the name. If the echo service itself fails, the check says up —
   a hiccup there must not be reported as a DNS problem.
 - `machine` (`machine`): one of Home watch's own machines reported within `quiet` seconds (900 by default) and has no
-  problem in its report.
+  problem in its report. An optional `host` makes it ping that address every round the way a `ping` check does, so one
+  check covers both questions: down with "Not on the network" when the address does not answer (honouring `retries`),
+  down with "On the network, but its reporter stopped sending" when it answers but the report is stale, up when both
+  are fine. Its response time is then the ping's; without `host` it only watches the reports.
 - `push`: something else calls `/api/push/<code>?status=up&msg=...`; silence longer than `every` (plus 30 s) is down.
 
 Other fields: `off_ok: true` turns "not answering" into a grey `off` instead of `down`, and it is not counted against
@@ -213,7 +216,8 @@ logged and skipped; the rest of the add-on must still work. A reporter can also 
   fix what it printed; never skip it (`--no-verify`, `LEFTHOOK=0`).
 - `cd addon && python -m unittest test_logs test_services` — two test files: `test_logs` for the Logs section's range
   cut and its `.log` / `.zip`, `test_services` for the checks' ids (the upgrade, history and codes moving to the id, a
-  rename, a duplicate id, a second start changing nothing). Both use a temporary data folder, so they need nothing
+  rename, a duplicate id, a second start changing nothing) and for a machine check with and without a `host` (its three
+  states, retries, and the ping time as its response time). Both use a temporary data folder, so they need nothing
   else. Otherwise the cheapest proof of a change is ruff plus the local run above: start it on an empty data folder,
   post a report, fetch `/api/status`, `/api/services` and one graph. `python -m py_compile addon/*.py` catches a file
   that will not even import, and if `page.html`'s script changed, `node --check` the script on its own (it is one

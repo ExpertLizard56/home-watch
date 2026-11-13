@@ -7,6 +7,9 @@ list shipped in addon/monitors.json; a list that is already there is never overw
   answers a name;
 - push: something else reports in at /api/push/<code>?status=up&msg=..., and silence longer than `every` = down;
 - machine (Home watch's own): one of its machines reported within `quiet` seconds (15 min if not set) with no problem.
+  A machine check may also name a `host`: each round it then pings that address the way a ping check does, and is down
+  when the address does not answer ("Not on the network") or answers but the report is stale ("On the network, but its
+  reporter stopped sending"); its response time is then the ping's.
 
 Every check has an "id": a whole number, unique, never reused. Everything kept about a check is under that id (its
 state, history, outages, push code, pushes), so its "name" is only the label shown: rename it as often as you like and
@@ -315,14 +318,23 @@ def check_push(m):
 
 
 def check_machine(m):
+    """One of Home watch's own machines reported within `quiet` seconds (900 if not set) and with no problem in its
+    report. With a `host`, it also pings that address every round, the way a ping check does: down when the address
+    does not answer, and down when it answers but the report is stale. Its response time is then the ping's."""
     got = machine(m['machine']) if machine else None
+    ms = 0
+    if m.get('host'):
+        ok, _, ms = check_ping(m)
+        if not ok:
+            return False, 'Not on the network', ms
     if not got:
-        return None, 'no report yet', 0
+        return None, 'no report yet', ms
     quiet = time.time() - got.get('last', 0)
     if quiet > int(m.get('quiet', 900)):
-        return False, f"no report for {int(quiet / 60)} min", 0
+        stopped = 'On the network, but its reporter stopped sending' if m.get('host') else f"no report for {int(quiet / 60)} min"
+        return False, stopped, ms
     problems = got.get('problems') or {}
-    return not problems, '; '.join(problems.values())[:200], 0
+    return not problems, '; '.join(problems.values())[:200], ms
 
 
 CHECKS = {'ping': check_ping, 'port': check_port, 'http': check_http, 'dns': check_dns, 'dyndns': check_dyndns,
@@ -453,12 +465,15 @@ def loop(options, note):
 
 def snapshot():
     """Each check as the page shows it. A push check also carries its push path, so it can be copied from the
-    check's page into whatever reports in (the page is home-network only, like the rest of the add-on)."""
+    check's page into whatever reports in (the page is home-network only, like the rest of the add-on); a check with
+    a host (a ping, a port, or a machine check that also pings its device) carries the address it pings."""
     out = []
     with lock:
         for m in monitors:
             row = {'id': m['id'], 'name': m.get('name', str(m['id'])), 'group': m.get('group', ''),
                    'type': m['type'], 'machine': m.get('machine', ''), **status[m['id']]}
+            if m.get('host'):
+                row['host'] = m['host']
             if m['type'] == 'push' and codes.get(str(m['id'])):
                 row['push'] = f"/api/push/{codes[str(m['id'])]}"
             out.append(row)

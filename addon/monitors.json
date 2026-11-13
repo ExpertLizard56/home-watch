@@ -5,7 +5,7 @@
   {"id": 4, "name": "Dynamic DNS is current", "group": "Internet", "type": "dyndns", "hostname": "home.example.net", "every": 1800, "retries": 2},
   {"id": 5, "name": "NAS", "group": "Devices", "type": "ping", "host": "192.168.1.10", "every": 60, "retries": 2, "machine": "nas"},
   {"id": 6, "name": "Living room TV", "group": "Devices", "type": "ping", "host": "192.168.1.20", "every": 60, "retries": 2, "off_ok": true},
-  {"id": 7, "name": "Workstation", "group": "Devices", "type": "machine", "machine": "pc", "quiet": 900, "every": 60, "retries": 0},
+  {"id": 7, "name": "Workstation", "group": "Devices", "type": "machine", "machine": "pc", "host": "192.168.1.30", "quiet": 900, "every": 60, "retries": 2},
   {"id": 8, "name": "NAS web page", "group": "Services", "type": "http", "url": "http://192.168.1.10/", "every": 60, "retries": 2, "heal": true, "app": "nas", "machine": "nas"},
   {"id": 9, "name": "NAS file share", "group": "Services", "type": "port", "host": "192.168.1.10", "port": 445, "every": 60, "retries": 2, "machine": "nas"},
   {"id": 10, "name": "NAS SSH", "group": "Services", "type": "port", "host": "192.168.1.10", "port": 22, "every": 60, "retries": 2, "machine": "nas"},

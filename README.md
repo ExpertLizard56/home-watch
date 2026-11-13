@@ -18,7 +18,8 @@ Assistant, and sends an alert through a webhook. It needs no cloud account and n
 - A machine that stops reporting (6 hours by default) is a problem too.
 - The add-on reports on itself: space, how much its card writes, and the kernel's SD card errors since boot.
 - Service checks written by hand in a plain JSON file: ping, TCP port, HTTP, DNS, a dynamic-DNS name still matching your
-  public IP, "one of my machines reported lately", and push checks (see below).
+  public IP, "one of my machines reported lately" (and, given its address, still on the network), and push checks (see
+  below).
 
 Everything is kept in `/share/home-watch` as plain files: a CSV history per machine (one row every 5 minutes, 12 months
 kept), the check list, the settings, and a log.
@@ -84,7 +85,8 @@ restart the add-on:
 [
   {"id": 1, "name": "Router", "group": "Devices", "type": "ping", "host": "192.168.1.1", "every": 60, "retries": 2},
   {"id": 2, "name": "NAS web page", "group": "Services", "type": "http", "url": "http://192.168.1.10/", "every": 60, "retries": 2},
-  {"id": 3, "name": "Nightly backup", "group": "Housekeeping", "type": "push", "every": 7200, "retries": 0}
+  {"id": 3, "name": "Nightly backup", "group": "Housekeeping", "type": "push", "every": 7200, "retries": 0},
+  {"id": 4, "name": "Workstation", "group": "Devices", "type": "machine", "machine": "pc", "host": "192.168.1.30", "quiet": 900, "every": 60, "retries": 2}
 ]
 ```
 
@@ -96,6 +98,13 @@ nothing. Two checks with the same `id` is an error: the second one is logged and
 
 `every` is seconds between runs; `retries` is how many failures in a row make it down. `"off_ok": true` shows a device
 that is simply switched off as grey "off" instead of down. `"machine": "nas"` puts the check on that machine's page.
+
+A `machine` check watches one of Home Watch's own machines: it is down when that machine has not reported for `quiet`
+seconds (900 by default) or has a problem in its report. Give it a `host` (the machine's address) and it also pings
+that address every round, the way a `ping` check does, so one check covers both questions: is it on the network, and is
+its reporter still sending. It is then down with `Not on the network` when the address does not answer, and down with
+`On the network, but its reporter stopped sending` when the address answers but the report is stale. Its response time
+is the ping time. Without `host` the check only watches the reports.
 
 The example list in `addon/monitors.json` in this repository has one of every type.
 
