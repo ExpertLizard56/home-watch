@@ -1,0 +1,7 @@
+# Python checker for addon/watch.py: ruff's defaults plus bugbear (likely bugs).
+line-length = 140
+
+[lint]
+extend-select = ["B", "E", "W"]
+# Catching every error, noting it and carrying on is how the add-on stays up.
+ignore = ["BLE001"]

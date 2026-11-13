@@ -1,0 +1,16 @@
+# Checks that run by themselves when anyone (a person or an AI) commits here (lefthook; AGENTS.md, Checks before a
+# commit). They cost no AI tokens. A failed check stops the commit: fix what it says. Set up once per checkout with
+# `lefthook install`.
+
+pre-commit:
+  jobs:
+    # Gitleaks: refuses a commit whose new lines hold a password, token or key (this repo is public, and a webhook
+    # address or a push code must never land in it). A false alarm: put `gitleaks:allow` in a comment on that line.
+    # Needs gitleaks on the PATH (winget install Gitleaks.Gitleaks).
+    - name: secrets check
+      run: gitleaks git --pre-commit --staged --redact --no-banner --verbose
+
+    # The Python, to the rules in ruff.toml.
+    - name: python checks
+      glob: "*.py"
+      run: python -m ruff check --force-exclude {staged_files}

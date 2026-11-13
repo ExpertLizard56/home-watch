@@ -1,0 +1,152 @@
+"""The hub's own report, made inside the add-on (the same shape a device posts to /report).
+
+The hub's card is usually an SD card: no SMART and no wear report, so what's watched is the trouble the drive
+checks look for elsewhere: kernel card errors since the machine started, the card refusing a write, free space, and
+how much it writes. eMMC wear is read the way Beszel does (agent/emmc_linux.go, MIT) in case it boots from eMMC.
+"""
+
+import glob
+import os
+import re
+import statistics
+import urllib.request
+
+import history
+
+LIMITS = {
+    'free_gb': 5,     # under 5 GB free on the hub's card is a problem
+    'writes_gb': 2,   # a day, and 3x the usual, before it's called a lot
+}
+CARD_ERRORS = re.compile(r'mmc\d.*(error|timeout|fail)|I/O error|EXT4-fs error|remount.*read-only', re.IGNORECASE)
+KERNEL_LOGS = ('/host/logs/boots/0/identifiers/kernel', '/host/logs/identifiers/kernel')
+
+seen = {'card_errors': None}
+
+
+def read(path, default=''):
+    try:
+        with open(path, encoding='utf-8') as f:
+            return f.read()
+    except OSError:
+        return default
+
+
+def supervisor(path, accept='application/json'):
+    req = urllib.request.Request(f'http://supervisor{path}', headers={
+        'Authorization': f"Bearer {os.environ.get('SUPERVISOR_TOKEN', '')}", 'Accept': accept})
+    with urllib.request.urlopen(req, timeout=20) as r:
+        return r.read().decode('utf-8', 'replace')
+
+
+def card_errors(note):
+    """Kernel messages since the machine started that say the card is in trouble. Needs the add-on's Supervisor
+    role manager, the only way the Supervisor lets an add-on read the kernel log."""
+    last = None
+    for path in KERNEL_LOGS:
+        try:
+            text = supervisor(path, 'text/plain')
+        except Exception as e:
+            last = e
+            continue
+        count = sum(1 for line in text.splitlines() if CARD_ERRORS.search(line))
+        if count != seen['card_errors']:
+            note(f"kernel log read: {count} SD card errors since it started")
+            seen['card_errors'] = count
+        return count
+    note(f"couldn't read the kernel log: {last}")
+    return None
+
+
+def emmc_wear(dev='mmcblk0'):
+    """Beszel's reading: pre_eol 1 normal, 2 warning, 3 urgent; life_time 0x01-0x0B = 0-100%+ used."""
+    base = f'/sys/block/{dev}/device'
+    pre, life = read(f'{base}/pre_eol_info').strip(), read(f'{base}/life_time').split()
+    if not pre and not life:
+        return None, None  # an SD card: no wear report
+    used = max((int(x, 16) for x in life), default=0)
+    return int(pre, 16) if pre else None, (min(used, 11) - 1) * 10 if used else None
+
+
+def writes_a_lot():
+    """SD cards wear out from writing. Last 24 h against the usual day (median of the 7 before)."""
+    rows = history.read('pi', 8)
+    if not rows or rows[-1][0] - rows[0][0] < 3 * 86400:
+        return None
+    end = rows[-1][0]
+    days, counts = [0.0] * 8, [0] * 8
+    for t, r in rows:
+        i = int((end - t) // 86400)
+        if i < 8:
+            days[i] += history.num(r.get('disk_write_mb')) or 0
+            counts[i] += 1
+    # Only whole days count as usual (288 reports a day; 200+ = whole enough): with a few days of history the empty
+    # days made the median 1 MB, and an ordinary 8.7 GB day was called "8662x the usual".
+    whole = [d for d, n in zip(days[1:], counts[1:], strict=True) if n >= 200]
+    if len(whole) < 3:
+        return None
+    usual = statistics.median(whole)
+    today = days[0] / 1000
+    if today > LIMITS['writes_gb'] and days[0] > 3 * usual:
+        times = days[0] / max(usual, 1)
+        return f"The SD card wrote {today:.1f} GB in the last day, about {times:.0f}x the usual. Something is writing a lot"
+    return None
+
+
+def problems(note):
+    out = {}
+    st = os.statvfs(history.DATA)
+    free_gb = st.f_bavail * st.f_frsize / 1e9
+    if free_gb < LIMITS['free_gb']:
+        out['space'] = f"Only {free_gb:.1f} GB free on the SD card"
+    errors = card_errors(note)
+    if errors:
+        out['card-errors'] = f"{errors} SD card errors since its last restart. Check backups and consider replacing the card"
+    try:
+        probe = f'{history.DATA}/.writecheck'
+        with open(probe, 'w') as f:
+            f.write('ok')
+        os.remove(probe)
+    except OSError:
+        out['card-write'] = 'The SD card is refusing writes. It may be failing'
+    pre_eol, used = emmc_wear()
+    if pre_eol and pre_eol >= 2:
+        out['card-wear'] = f"The card says it's {'nearly worn out' if pre_eol == 2 else 'worn out'}"
+    elif used is not None and used >= 90:
+        out['card-wear'] = f"The card says {used}% of its life is used"
+    lot = writes_a_lot()
+    if lot:
+        out['card-writes'] = lot
+    return out
+
+
+def report(note):
+    ticks = [int(x) for x in read('/proc/stat').splitlines()[0].split()[1:]]
+    mem = {ln.split(':')[0]: int(ln.split()[1]) for ln in read('/proc/meminfo').splitlines() if ':' in ln}
+    temps = [int(read(p, '0')) / 1000 for p in glob.glob('/sys/class/thermal/thermal_zone*/temp')]
+    card = read('/sys/block/mmcblk0/stat').split()
+    net = [0, 0]
+    for ln in read('/proc/net/dev').splitlines()[2:]:
+        name, rest = ln.split(':', 1)
+        if re.match(r'\s*(eth|end|wlan)\d', name):
+            f = rest.split()
+            net[0] += int(f[0])
+            net[1] += int(f[8])
+    st = os.statvfs(history.DATA)
+    counters = {'net_rx_bytes': net[0], 'net_tx_bytes': net[1]}
+    if card:
+        counters.update(disk_read_bytes=int(card[2]) * 512, disk_write_bytes=int(card[6]) * 512)
+    return {
+        'machine': 'pi', 'name': 'Pi', 'kind': 'pi',
+        'cpu_ticks': [sum(ticks), ticks[3] + ticks[4]],
+        'metrics': {
+            'mem': round(100 * (1 - mem['MemAvailable'] / mem['MemTotal']), 1),
+            'swap': round(100 * (1 - mem.get('SwapFree', 0) / mem['SwapTotal']), 1) if mem.get('SwapTotal') else None,
+            'load': float(read('/proc/loadavg').split()[0]),
+            'temp': round(max(temps), 1) if temps else None,
+            'disk_used_pct': round(100 * (1 - st.f_bavail / st.f_blocks), 1),
+            'disk_free_gb': round(st.f_bavail * st.f_frsize / 1e9, 1),
+            'uptime_h': round(float(read('/proc/uptime').split()[0]) / 3600, 1),
+        },
+        'counters': counters,
+        'problems': problems(note),
+    }

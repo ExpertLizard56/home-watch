@@ -1,0 +1,309 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Home watch</title>
+<!-- Three views: everything at a glance, one device's page (click its card or one of its checks), and one check's page
+     (click a check on a device's page, or one with no device). One card per machine is Beszel's layout (MIT); the
+     hour-by-hour strip, 24 h / 30 day / year uptime and outage list are Uptime Kuma's (MIT). Plain SVG, no libraries. -->
+<style>
+:root { --bg:#f6f7f9; --card:#fff; --text:#1d2330; --dim:#6b7280; --line:#e3e6eb; --ok:#1f9d55; --bad:#d64545; --warn:#c98a00;
+        --c1:#2f6fde; --c2:#e07a1f; --c3:#8a4fd8; --hover:#eef2fb; --none:#eceef1; }
+@media (prefers-color-scheme: dark) { :root { --bg:#111418; --card:#1b2027; --text:#e6e9ee; --dim:#9aa3af; --line:#2b323c;
+        --ok:#3cc47c; --bad:#f06464; --warn:#e3b341; --c1:#6ea2ff; --c2:#ffa257; --c3:#b78cff; --hover:#232a35; --none:#262c35; } }
+* { box-sizing:border-box; }
+body { margin:0; background:var(--bg); color:var(--text); font:14px/1.4 system-ui, sans-serif; }
+main { max-width:1200px; margin:0 auto; padding:16px; }
+header { display:flex; flex-wrap:wrap; align-items:center; gap:12px; margin-bottom:16px; min-height:34px; }
+h1 { font-size:20px; margin:0; flex:1; display:flex; align-items:center; gap:10px; }
+h2.sec { font-size:16px; margin:20px 0 10px; }
+button { font:inherit; }
+.back, .ranges button { border:1px solid var(--line); background:var(--card); color:var(--text); padding:6px 12px; border-radius:6px; cursor:pointer; }
+.ranges button.on { background:var(--c1); color:#fff; border-color:var(--c1); }
+.problems { background:var(--card); border-left:4px solid var(--bad); padding:10px 14px; border-radius:6px; margin-bottom:16px; }
+.problems.none { border-left-color:var(--ok); }
+.panel { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:12px; }
+.grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(260px, 1fr)); gap:12px; }
+.card { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:12px; cursor:pointer; }
+.card:hover { border-color:var(--c1); }
+.card h3 { font-size:15px; margin:0 0 6px; display:flex; align-items:center; gap:8px; }
+.card h3 .go { margin-left:auto; color:var(--dim); font-weight:normal; }
+.dot { width:10px; height:10px; border-radius:50%; background:var(--ok); flex:none; }
+.dot.bad { background:var(--bad); } .dot.quiet { background:var(--warn); } .dot.wait { background:var(--line); }
+.nums { display:grid; grid-template-columns:repeat(3, 1fr); gap:4px; }
+.nums div { font-size:12px; color:var(--dim); } .nums b { display:block; font-size:15px; color:var(--text); }
+.when { font-size:12px; color:var(--dim); margin-top:6px; }
+.svc { display:grid; grid-template-columns:repeat(auto-fill, minmax(300px, 1fr)); gap:12px; }
+.svc section { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:10px 12px; }
+.svc h3 { font-size:13px; margin:0 0 6px; color:var(--dim); font-weight:600; }
+.row { display:flex; align-items:center; gap:8px; padding:3px 4px; margin:0 -4px; font-size:13px; border-radius:4px; cursor:pointer; }
+.row:hover { background:var(--hover); }
+.row .n { flex:1; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.row .u { color:var(--dim); font-size:12px; width:52px; text-align:right; flex:none; }
+.strip { display:flex; gap:1px; flex:none; }
+.strip i { width:3px; height:14px; border-radius:1px; background:var(--none); }
+.strip i.up { background:var(--ok); } .strip i.down { background:var(--bad); } .strip i.part { background:var(--warn); }
+.strip i.off { background:var(--line); }
+.strip.big { gap:3px; } .strip.big i { flex:1; width:auto; height:30px; border-radius:2px; }
+.striplabels { display:flex; justify-content:space-between; font-size:11px; color:var(--dim); margin-top:4px; }
+.facts { display:grid; grid-template-columns:repeat(auto-fill, minmax(130px, 1fr)); gap:10px; }
+.facts div { font-size:12px; color:var(--dim); } .facts b { display:block; font-size:16px; color:var(--text); }
+.facts code { font:12px ui-monospace, Consolas, monospace; word-break:break-all; user-select:all; }
+.charts { display:grid; grid-template-columns:repeat(auto-fill, minmax(340px, 1fr)); gap:12px; }
+.chart { background:var(--card); border:1px solid var(--line); border-radius:8px; padding:10px; }
+.chart h3 { font-size:13px; margin:0 0 4px; display:flex; justify-content:space-between; }
+.chart h3 span { font-weight:normal; color:var(--dim); }
+svg { width:100%; height:140px; display:block; }
+.legend { font-size:12px; color:var(--dim); } .legend i { display:inline-block; width:10px; height:3px; margin:0 4px 2px 8px; }
+.split { display:flex; flex-wrap:wrap; justify-content:space-between; align-items:center; gap:10px; margin:20px 0 10px; }
+.split h2 { margin:0; font-size:16px; }
+.out { width:100%; border-collapse:collapse; font-size:13px; }
+.out td { padding:5px 6px; border-top:1px solid var(--line); vertical-align:top; }
+.out tr:first-child td { border-top:none; }
+.out .d { color:var(--dim); } .out .now { color:var(--bad); font-weight:600; }
+.empty { color:var(--dim); }
+.scroll { max-height:320px; overflow:auto; }
+.procs td:last-child { text-align:right; width:70px; }
+pre.log { margin:0; font:12px/1.45 ui-monospace, Consolas, monospace; white-space:pre-wrap; word-break:break-all; }
+@media (max-width:420px) { .charts, .svc { grid-template-columns:1fr; } main { padding:12px; } }
+</style>
+</head>
+<body>
+<main>
+<div id="home">
+  <header><h1>Home watch</h1></header>
+  <div id="problems" class="problems none">Loading...</div>
+  <h2 class="sec">Devices</h2>
+  <div id="grid" class="grid"></div>
+  <h2 class="sec">Services <span class="when" style="font-weight:normal">(strip = last 24 hours, % = up in the last day)</span></h2>
+  <div id="svc" class="svc"></div>
+  <h2 class="sec">Outages, last 7 days</h2>
+  <div class="panel" id="hout"></div>
+</div>
+
+<div id="device" hidden>
+  <header><button class="back">&#8249; Back</button><h1 id="dname"></h1></header>
+  <div id="dproblems" class="problems none"></div>
+  <div class="when" id="dwhen" style="margin:-8px 0 12px"></div>
+  <div id="facts" class="facts panel"></div>
+  <div id="dsvcwrap"><h2 class="sec">Checks on this device</h2><div class="panel" id="dsvc"></div>
+    <h2 class="sec">Outages, last 30 days</h2><div class="panel" id="dout"></div></div>
+  <div id="dprocwrap"><h2 class="sec">Programs <span class="when" style="font-weight:normal">(share of the CPU over the last 5 minutes)</span></h2>
+    <div class="panel scroll"><table class="out procs" id="dproc"></table></div></div>
+  <div id="dlogwrap" hidden><h2 class="sec">Log <span class="when" style="font-weight:normal">(newest at the bottom)</span></h2>
+    <div class="panel scroll" id="dlogbox"><pre class="log" id="dlog"></pre></div></div>
+  <div class="split"><h2>Graphs</h2>
+    <div class="ranges"><button data-d="1" class="on">Day</button> <button data-d="7">Week</button> <button data-d="30">Month</button> <button data-d="365">Year</button></div>
+  </div>
+  <div id="charts" class="charts"></div>
+</div>
+
+<div id="check" hidden>
+  <header><button class="back">&#8249; Back</button><h1 id="cname"></h1></header>
+  <div id="cstate" class="problems none"></div>
+  <div class="facts panel" id="cfacts"></div>
+  <h2 class="sec">Last 24 hours</h2>
+  <div class="panel"><div class="strip big" id="cstrip"></div><div class="striplabels"><span>24 h ago</span><span>12 h ago</span><span>now</span></div></div>
+  <div class="split"><h2>Response time</h2>
+    <div class="ranges"><button data-d="1" class="on">Day</button> <button data-d="7">Week</button> <button data-d="30">Month</button> <button data-d="365">Year</button></div>
+  </div>
+  <div id="ccharts" class="charts"></div>
+  <h2 class="sec">Outages, last year</h2>
+  <div class="panel" id="cout"></div>
+</div>
+</main>
+<script>
+const CHARTS = [
+  ['CPU', '%', [['cpu', 'CPU']], 100],
+  ['Memory', '%', [['mem', 'Used'], ['swap', 'Swap']], 100],
+  ['Temperature', 'C', [['temp', 'CPU / board'], ['gpu_temp', 'Graphics'], ['drive_temp', 'Drive']]],
+  ['Drive writes and reads', 'MB per 5 min', [['disk_write_mb', 'Written'], ['disk_read_mb', 'Read']]],
+  ['Network', 'MB per 5 min', [['net_rx_mb', 'In'], ['net_tx_mb', 'Out']]],
+  ['Drive space used', '%', [['disk_used_pct', 'Used']], 100],
+  ['Graphics card', '% / W', [['gpu_use', 'Busy %'], ['gpu_power', 'Watts']]],
+  ['Wi-Fi devices', '', [['wifi_clients', 'Connected']]],
+  ['Load', '', [['load', 'Load']]],
+];
+const CHECK_CHARTS = [['Response time', 'ms', [['ms', 'Average']]], ['Checks passed', '%', [['up', 'Passed']], 100]];
+// Everything a device can report, in the order the device page lists it.
+const FACTS = [
+  ['cpu', 'CPU', '%'], ['mem', 'Memory used', '%'], ['swap', 'Swap used', '%'], ['load', 'Load', ''],
+  ['temp', 'Temperature', ' C'], ['gpu_temp', 'Graphics temp', ' C'], ['gpu_use', 'Graphics busy', '%'],
+  ['gpu_power', 'Graphics power', ' W'], ['drive_temp', 'Drive temp', ' C'], ['disk_used_pct', 'Space used', '%'],
+  ['disk_free_gb', 'Space free', ' GB'], ['disk_write_mb', 'Written, last 5 min', ' MB'], ['disk_read_mb', 'Read, last 5 min', ' MB'],
+  ['net_rx_mb', 'Network in, 5 min', ' MB'], ['net_tx_mb', 'Network out, 5 min', ' MB'], ['wifi_clients', 'Wi-Fi devices', ''],
+];
+const TYPES = {ping: 'Answers pings', port: 'Port open', http: 'Web page answers', dns: 'Answers DNS', push: 'Reports in', machine: 'Device reports in'};
+let days = 1, status = null, svc = null, outs = [], inside = false;
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const ago = s => s < 120 ? 'just now' : s < 7200 ? Math.round(s/60) + ' min ago' : s < 172800 ? Math.round(s/3600) + ' h ago' : Math.round(s/86400) + ' days ago';
+const took = s => s < 90 ? Math.round(s) + ' s' : s < 5400 ? Math.round(s/60) + ' min' : s < 172800 ? (Math.round(s/360) / 10) + ' h' : Math.round(s/86400) + ' days';
+const fmt = (v, u) => v == null ? '-' : (Math.round(v * 10) / 10) + u;
+const pct = v => v == null ? '-' : (v >= 99.995 ? '100' : v.toFixed(v >= 99 ? 2 : 1)) + '%';
+const upFor = h => h == null ? '-' : h < 48 ? fmt(h, ' h') : fmt(h / 24, ' days');
+const when = t => new Date(t * 1000).toLocaleString([], {weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit'});
+const route = () => { const h = decodeURIComponent(location.hash.slice(1)); return h.startsWith('check:') ? ['check', h.slice(6)] : h ? ['device', h] : ['home', '']; };
+const probsOf = id => Object.entries(status.problems || {}).filter(([k]) => k.startsWith(id + '-'));
+const go = (view, id) => { inside = true; location.hash = view === 'check' ? 'check:' + encodeURIComponent(id) : encodeURIComponent(id); window.scrollTo(0, 0); };
+// The order and the names come from settings.json on the hub (machines); anything it doesn't name goes last, by id.
+const placeOf = id => { const i = (status.order || []).indexOf(id); return i < 0 ? status.order.length + 1e6 : i; };
+const nameOf = id => (status.labels || {})[id] || (status.machines[id] || {}).name || id;
+
+function dotOf(id) {
+  const m = status.machines[id], quiet = status.now - m.last;
+  return quiet > status.silent_hours * 3600 ? 'quiet' : probsOf(id).length || svc.monitors.some(s => s.machine === id && s.state === 'down') ? 'bad' : '';
+}
+const checkDot = m => m.state === 'up' ? '' : m.state === 'down' ? 'bad' : m.state === 'pending' ? 'quiet' : 'wait';
+const strip = name => '<span class="strip">' + (svc.strips[name] || Array(24).fill('')).map(s => '<i class="' + s + '"></i>').join('') + '</span>';
+
+// A check's row. On the main page a check that belongs to a device opens that device; anywhere else it opens the check.
+function serviceRow(m, toDevice) {
+  const tip = m.state === 'up' ? 'Up' : m.state === 'waiting' ? 'Waiting for its first report' : m.state + (m.detail ? ': ' + m.detail : '');
+  const dev = toDevice && m.machine && status.machines[m.machine];
+  const up = (svc.uptime[m.name] || {}).d1;
+  return '<div class="row" ' + (dev ? 'data-dev="' + esc(m.machine) : 'data-check="' + esc(m.name)) + '" title="' + esc(tip) + '">' +
+    '<span class="dot ' + checkDot(m) + '"></span><span class="n">' + esc(m.name) + '</span>' + strip(m.name) +
+    '<span class="u">' + (m.state === 'down' ? 'down' : m.state === 'off' ? 'off' : pct(up)) + '</span></div>';
+}
+
+function outageTable(list, showName) {
+  if (!list.length) return '<span class="empty">None.</span>';
+  return '<table class="out">' + list.slice(0, 50).map(o => '<tr>' + (showName ? '<td><b>' + esc(o.name) + '</b></td>' : '') +
+    '<td>' + when(o.start) + '</td><td>' + (o.end ? took(o.end - o.start) : '<span class="now">still down</span>') + '</td>' +
+    '<td class="d">' + esc(o.detail || '') + '</td></tr>').join('') + '</table>';
+}
+
+async function load() {
+  [status, svc, outs] = await Promise.all(['api/status', 'api/services', 'api/outages?days=365'].map(u => fetch(u).then(r => r.json())));
+  show();
+}
+
+function show() {
+  const [view, id] = route();
+  const ok = view === 'device' ? status.machines[id] : view === 'check' ? svc.monitors.find(m => m.name === id) : true;
+  const v = ok ? view : 'home';
+  ['home', 'device', 'check'].forEach(x => $(x).hidden = x !== v);
+  if (v === 'device') device(id); else if (v === 'check') check(id); else home();
+}
+
+function home() {
+  document.title = 'Home watch';
+  const down = svc.monitors.filter(m => m.state === 'down');
+  const lines = Object.entries(status.problems || {}).map(([k, [t, m]]) => '<div><b>' + esc(t) + ':</b> ' + esc(m) + '</div>')
+    .concat(down.map(m => '<div><b>' + esc(m.name) + ':</b> down' + (m.detail ? ' (' + esc(m.detail) + ')' : '') + '</div>'));
+  $('problems').className = 'problems' + (lines.length ? '' : ' none');
+  $('problems').innerHTML = lines.length ? lines.join('') : 'Everything looks fine.';
+  const ids = Object.keys(status.machines).sort((a, b) => placeOf(a) - placeOf(b) || a.localeCompare(b));
+  $('grid').innerHTML = ids.map(id => {
+    const m = status.machines[id], x = m.metrics || {};
+    return '<div class="card" data-dev="' + esc(id) + '"><h3><span class="dot ' + dotOf(id) + '"></span>' + esc(nameOf(id)) + '<span class="go">&#8250;</span></h3>' +
+      '<div class="nums"><div>CPU<b>' + fmt(x.cpu, '%') + '</b></div><div>Memory<b>' + fmt(x.mem, '%') + '</b></div>' +
+      '<div>Temp<b>' + fmt(x.temp ?? x.gpu_temp, ' C') + '</b></div><div>Space used<b>' + fmt(x.disk_used_pct, '%') + '</b></div>' +
+      '<div>Written<b>' + fmt(x.disk_write_mb, ' MB') + '</b></div><div>Up<b>' + upFor(x.uptime_h) + '</b></div></div>' +
+      '<div class="when">Last report ' + ago(status.now - m.last) + '</div></div>';
+  }).join('');
+  const groups = {};
+  svc.monitors.forEach(m => (groups[m.group || 'Other'] = groups[m.group || 'Other'] || []).push(m));
+  $('svc').innerHTML = Object.entries(groups).map(([g, ms]) => '<section><h3>' + esc(g) + '</h3>' + ms.map(m => serviceRow(m, true)).join('') + '</section>').join('');
+  $('hout').innerHTML = outageTable(outs.filter(o => o.start > status.now - 7 * 86400), true);
+}
+
+function device(id) {
+  const m = status.machines[id], x = m.metrics || {}, probs = probsOf(id);
+  const mine = svc.monitors.filter(s => s.machine === id), names = new Set(mine.map(s => s.name));
+  const down = mine.filter(s => s.state === 'down');
+  $('dname').innerHTML = '<span class="dot ' + dotOf(id) + '"></span>' + esc(nameOf(id));
+  document.title = nameOf(id) + ' - Home watch';
+  const lines = probs.map(([k, [t, msg]]) => '<div>' + esc(msg) + '</div>')
+    .concat(down.map(s => '<div><b>' + esc(s.name) + ':</b> down' + (s.detail ? ' (' + esc(s.detail) + ')' : '') + '</div>'));
+  $('dproblems').className = 'problems' + (lines.length ? '' : ' none');
+  $('dproblems').innerHTML = lines.length ? lines.join('') : 'Nothing wrong here.';
+  $('dwhen').textContent = 'Last report ' + ago(status.now - m.last) + ', up ' + upFor(x.uptime_h);
+  $('facts').innerHTML = FACTS.filter(([k]) => x[k] != null).map(([k, label, u]) => '<div>' + esc(label) + '<b>' + fmt(x[k], u) + '</b></div>').join('');
+  $('dsvcwrap').hidden = !mine.length;
+  $('dsvc').innerHTML = mine.map(s => serviceRow(s, false)).join('');
+  $('dout').innerHTML = outageTable(outs.filter(o => names.has(o.name) && o.start > status.now - 30 * 86400), true);
+  const procs = m.procs || [];
+  $('dprocwrap').hidden = !procs.length;
+  $('dproc').innerHTML = procs.map(([p, v]) => '<tr><td>' + esc(p) + '</td><td>' + v.toFixed(1) + '%</td></tr>').join('');
+  deviceLog(id);
+  charts(['device', id], 'api/history?machine=' + encodeURIComponent(id), CHARTS, 'charts');
+}
+
+function check(name) {
+  const m = svc.monitors.find(x => x.name === name), u = svc.uptime[name] || {};
+  document.title = name + ' - Home watch';
+  $('cname').innerHTML = '<span class="dot ' + checkDot(m) + '"></span>' + esc(name);
+  const since = ago(status.now - m.since).replace(' ago', '').replace('just now', 'a moment');
+  const word = {up: 'Up', down: 'Down', off: 'Off (normal for this one)', pending: 'Not answering, trying again', waiting: 'Waiting for its first report'}[m.state] || m.state;
+  $('cstate').className = 'problems' + (m.state === 'down' || m.state === 'pending' ? '' : ' none');
+  $('cstate').innerHTML = '<b>' + esc(word) + '</b>' + (m.detail ? ': ' + esc(m.detail) : '') + (m.state === 'waiting' ? '' : ', for ' + since);
+  const dev = m.machine && status.machines[m.machine];
+  $('cfacts').innerHTML = [['Up, last 24 h', pct(u.d1)], ['Up, last 30 days', pct(u.d30)], ['Up, last year', pct(u.d365)],
+    ['Last response', m.ms ? m.ms + ' ms' : '-'], ['What it checks', TYPES[m.type] || m.type], ['Group', m.group || '-']]
+    .map(([k, v]) => '<div>' + esc(k) + '<b>' + esc(v) + '</b></div>').join('') +
+    (dev ? '<div>Device<b><a href="#' + encodeURIComponent(m.machine) + '">' + esc(nameOf(m.machine)) + '</a></b></div>' : '') +
+    // A push check's path, so it can be copied into whatever reports in (the code lives in push-codes.json on the hub).
+    (m.push ? '<div style="grid-column:1/-1">Push path<b><code>' + esc(m.push) + '</code></b></div>' : '');
+  $('cstrip').innerHTML = (svc.strips[name] || Array(24).fill('')).map((s, i) =>
+    '<i class="' + s + '" title="' + (24 - i) + ' to ' + (23 - i) + ' h ago: ' + ({up: 'up', down: 'down', part: 'down part of the hour', off: 'off', '': 'no record'})[s] + '"></i>').join('');
+  $('cout').innerHTML = outageTable(outs.filter(o => o.name === name), false);
+  charts(['check', name], 'api/check?name=' + encodeURIComponent(name), CHECK_CHARTS, 'ccharts');
+}
+
+async function deviceLog(id) {
+  const got = await (await fetch('api/log?machine=' + encodeURIComponent(id))).json();
+  const [view, now] = route();
+  if (view !== 'device' || now !== id) return;
+  $('dlogwrap').hidden = !got.lines.length;
+  $('dlog').textContent = got.lines.join(String.fromCharCode(10));
+  $('dlogbox').scrollTop = $('dlogbox').scrollHeight;
+}
+
+async function charts(at, url, list, box) {
+  const h = await (await fetch(url + '&days=' + days)).json();
+  const [view, id] = route();
+  if (view !== at[0] || id !== at[1]) return;  // clicked away while it loaded
+  $(box).innerHTML = list.filter(c => c[2].some(([k]) => h.series[k] && h.series[k].some(v => v != null))).map(c => chart(c, h)).join('') ||
+    '<p class="empty">No history yet.</p>';
+}
+
+function chart([title, unit, lines, fixedMax], h) {
+  const W = 340, H = 140, L = 34, B = 18, t = h.t, n = t.length;
+  const shown = lines.filter(([k]) => h.series[k]);
+  const all = shown.flatMap(([k]) => h.series[k].filter(v => v != null));
+  const max = fixedMax || Math.max(1, ...all) * 1.1, t0 = t[0], t1 = t[n - 1] || t0 + 1;
+  const x = s => L + (W - L - 4) * (s - t0) / Math.max(1, t1 - t0), y = v => (H - B) - (H - B - 6) * v / max;
+  const cols = ['var(--c1)', 'var(--c2)', 'var(--c3)'];
+  let svg = '<line x1="' + L + '" y1="' + (H - B) + '" x2="' + W + '" y2="' + (H - B) + '" stroke="var(--line)"/>' +
+    '<text x="2" y="12" font-size="10" fill="var(--dim)">' + Math.round(max) + '</text><text x="2" y="' + (H - B) + '" font-size="10" fill="var(--dim)">0</text>';
+  const lbl = s => { const d = new Date(s * 1000); return days > 2 ? (d.getMonth() + 1) + '/' + d.getDate() : d.getHours() + ':' + String(d.getMinutes()).padStart(2, '0'); };
+  if (n) svg += '<text x="' + L + '" y="' + (H - 4) + '" font-size="10" fill="var(--dim)">' + lbl(t0) + '</text><text x="' + (W - 4) + '" y="' + (H - 4) + '" font-size="10" fill="var(--dim)" text-anchor="end">' + lbl(t1) + '</text>';
+  shown.forEach(([k], i) => {
+    let d = '', pen = false;
+    h.series[k].forEach((v, j) => { if (v == null || (j && t[j] - t[j - 1] > 3 * (t1 - t0) / Math.max(1, n))) pen = false;
+      if (v != null) { d += (pen ? 'L' : 'M') + x(t[j]).toFixed(1) + ' ' + y(v).toFixed(1); pen = true; } });
+    svg += '<path d="' + d + '" fill="none" stroke="' + cols[i] + '" stroke-width="1.6"/>';
+  });
+  const last = shown.map(([k, name], i) => { const v = h.series[k].filter(v => v != null).pop(); return '<i style="background:' + cols[i] + '"></i>' + esc(name) + ' ' + fmt(v, ''); }).join('');
+  return '<div class="chart"><h3>' + esc(title) + '<span>' + esc(unit) + '</span></h3><svg viewBox="0 0 ' + W + ' ' + H + '" preserveAspectRatio="none">' + svg + '</svg><div class="legend">' + last + '</div></div>';
+}
+
+// Clicks: a device card or a device's check opens the device; any other check opens the check's own page.
+document.addEventListener('click', e => {
+  const el = e.target.closest('[data-dev], [data-check]');
+  if (el) go(el.dataset.dev ? 'device' : 'check', el.dataset.dev || el.dataset.check);
+});
+document.querySelectorAll('.back').forEach(b => b.onclick = () => { if (inside) history.back(); else location.hash = ''; });
+window.addEventListener('hashchange', () => { $('charts').innerHTML = $('ccharts').innerHTML = ''; if (status) show(); });
+document.querySelectorAll('.ranges button').forEach(b => b.onclick = () => {
+  days = +b.dataset.d;
+  document.querySelectorAll('.ranges button').forEach(o => o.classList.toggle('on', +o.dataset.d === days));
+  show();
+});
+load(); setInterval(load, 60000);
+</script>
+</body>
+</html>

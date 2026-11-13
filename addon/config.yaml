@@ -1,0 +1,39 @@
+name: Home watch
+version: "0.8.0"
+slug: home_watch
+description: Keeps an eye on every machine at home (health, history, drive and SD card trouble) and tells your phone through Home Assistant when something's wrong.
+url: https://github.com/ExpertLizard56/home-watch
+# The base image (python:3.13-alpine) is published for every one of these, so no build.yaml is needed and the Pi's
+# aarch64 build is unchanged.
+arch:
+  - aarch64
+  - amd64
+  - armv7
+startup: application
+boot: auto
+init: false
+# Host networking, so the other machines can post their reports to port 8790 and open the page.
+host_network: true
+ingress: true
+ingress_port: 8790
+panel_icon: mdi:shield-check
+panel_title: Home watch
+# History, state, log, the check list and settings.json are plain files in /share/home-watch.
+map:
+  - share:rw
+# Reads the kernel log (SD card errors) through the Supervisor.
+hassio_api: true
+hassio_role: manager
+# Your own names and numbers (machine labels and order, limits, log senders, who may report, the self-heal script
+# name) are not options: they are /share/home-watch/settings.json, read at start (see settings.example.json).
+options:
+  alert_webhook: ""
+  silent_hours: 6
+  self_heal: false
+  self_heal_webhook: ""
+schema:
+  alert_webhook: str
+  silent_hours: int(1,168)
+  self_heal: bool
+  self_heal_webhook: str
+# Home Assistant builds this folder on the machine it runs on: as a local add-on it lives in /local_apps/home_watch.

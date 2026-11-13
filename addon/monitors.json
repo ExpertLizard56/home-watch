@@ -1,0 +1,15 @@
+[
+  {"name": "Internet", "group": "Internet", "type": "ping", "host": "9.9.9.9", "every": 60, "retries": 2},
+  {"name": "Router", "group": "Internet", "type": "ping", "host": "192.168.1.1", "every": 60, "retries": 2, "machine": "router"},
+  {"name": "Public name answers", "group": "Internet", "type": "dns", "name_to_look_up": "example.com", "server": "9.9.9.9", "port": 53, "every": 60, "retries": 2},
+  {"name": "Dynamic DNS is current", "group": "Internet", "type": "dyndns", "hostname": "home.example.net", "every": 1800, "retries": 2},
+  {"name": "NAS", "group": "Devices", "type": "ping", "host": "192.168.1.10", "every": 60, "retries": 2, "machine": "nas"},
+  {"name": "Living room TV", "group": "Devices", "type": "ping", "host": "192.168.1.20", "every": 60, "retries": 2, "off_ok": true},
+  {"name": "Workstation", "group": "Devices", "type": "machine", "machine": "pc", "quiet": 900, "every": 60, "retries": 0},
+  {"name": "NAS web page", "group": "Services", "type": "http", "url": "http://192.168.1.10/", "every": 60, "retries": 2, "heal": true, "app": "nas", "machine": "nas"},
+  {"name": "NAS file share", "group": "Services", "type": "port", "host": "192.168.1.10", "port": 445, "every": 60, "retries": 2, "machine": "nas"},
+  {"name": "NAS SSH", "group": "Services", "type": "port", "host": "192.168.1.10", "port": 22, "every": 60, "retries": 2, "machine": "nas"},
+  {"name": "DNS server", "group": "Services", "type": "dns", "name_to_look_up": "example.com", "server": "192.168.1.10", "port": 53, "every": 60, "retries": 2, "heal": true, "app": "dns", "machine": "nas"},
+  {"name": "Nightly backup", "group": "Housekeeping", "type": "push", "every": 7200, "retries": 0},
+  {"name": "Sensor gateway", "group": "Housekeeping", "type": "push", "every": 180, "retries": 1, "heal": true, "app": "sensor_gateway", "machine": "nas"}
+]
