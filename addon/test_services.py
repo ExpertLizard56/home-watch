@@ -10,27 +10,36 @@ so the host states are tested without a device on the network.
 import json
 import os
 import tempfile
+import threading
 import time
 import unittest
+import urllib.error
+import urllib.request
 from datetime import datetime, timedelta
+from http.server import ThreadingHTTPServer
 from unittest import mock
 
 DATA = tempfile.mkdtemp(prefix='home-watch-services-test-')
 os.environ['HOME_WATCH_DATA'] = DATA
 
 import services  # noqa: E402  (after the temporary data folder is set)
+import watch  # noqa: E402  (the page's API: the Checks screen's save, remove and move doors)
 
 NOW = time.time()
 HOUR_AGO = datetime.fromtimestamp(NOW - 3600)
 PING = {'type': 'ping', 'host': '192.0.2.1', 'every': 60, 'retries': 0}
 
 
-class Checks(unittest.TestCase):
+class Helpers(unittest.TestCase):
+    """A fresh data folder and the small writers the tests below share; no tests of its own, so the API tests can use
+    the same setup without running them twice."""
+
     def setUp(self):
         self.folder = tempfile.mkdtemp(prefix='checks-', dir=DATA)
         services.DATA = self.folder
         services.LIST = os.path.join(self.folder, 'monitors.json')
         services.CODES = os.path.join(self.folder, 'push-codes.json')
+        services.REMOVED = os.path.join(self.folder, 'removed-ids.json')
         services.EVENTS = os.path.join(self.folder, 'services')
         services.CHECKS_DIR = os.path.join(self.folder, 'checks')
         services.monitors[:] = []
@@ -87,6 +96,7 @@ class Checks(unittest.TestCase):
                     got[os.path.relpath(path, self.folder)] = f.read()
         return got
 
+class Checks(Helpers):
     def test_checks_without_an_id_get_the_next_free_number(self):
         self.write_list([{'id': 4, 'name': 'Router', **PING},
                          {'name': 'NAS', 'group': 'Devices', **PING},
@@ -175,6 +185,180 @@ class Checks(unittest.TestCase):
         services.load(self.note)
         self.assertEqual(services.monitors[0]['id'], 10)
 
+    # ---- the Checks screen: validate, save, reorder, remove, and the self-heal app that survives a rename ----
+
+    def test_validate_says_what_is_wrong_next_to_the_field(self):
+        _, errors = services.validate({'type': 'ping', 'name': 'Router'})
+        self.assertIn('host', errors)
+        _, errors = services.validate({'type': 'port', 'name': 'NAS', 'host': '192.0.2.1', 'port': '0'})
+        self.assertIn('port', errors)
+        _, errors = services.validate({'type': 'http', 'name': 'Web', 'url': 'ftp://example.com/'})
+        self.assertIn('url', errors)
+        _, errors = services.validate({'type': 'dns', 'name': 'DNS', 'name_to_look_up': 'example.com'})
+        self.assertIn('server', errors)
+        _, errors = services.validate({'type': 'dyndns', 'name': 'DDNS'})
+        self.assertIn('hostname', errors)
+        _, errors = services.validate({'type': 'machine', 'name': 'PC'})
+        self.assertIn('machine', errors)
+        _, errors = services.validate({'type': 'nope', 'name': ''})
+        self.assertIn('type', errors)
+        self.assertIn('name', errors)
+
+    def test_validate_keeps_only_the_fields_the_type_reads(self):
+        got, errors = services.validate({'type': 'http', 'name': 'Web', 'url': 'https://example.com/', 'expect': '204',
+                                         'host': '192.0.2.1', 'port': '445', 'name_to_look_up': 'example.com',
+                                         'server': '192.0.2.53', 'hostname': 'home.example.net', 'machine': 'PC',
+                                         'every': '120', 'retries': '1', 'off_ok': True, 'heal': True, 'app': 'Media Hub'})
+        self.assertEqual(errors, {})
+        self.assertEqual(got['url'], 'https://example.com/')
+        self.assertEqual(got['expect'], 204)
+        self.assertEqual(got['machine'], 'pc')       # a typed machine id is made the way watch.py makes it
+        self.assertEqual(got['every'], 120)
+        self.assertEqual(got['retries'], 1)
+        self.assertTrue(got['off_ok'])
+        self.assertTrue(got['heal'])
+        self.assertEqual(got['app'], 'media_hub')    # the script name's app is a slug
+        for key in ('host', 'port', 'name_to_look_up', 'server', 'hostname'):
+            self.assertNotIn(key, got)                # an http check reads none of these
+
+    def test_validate_keeps_an_expected_http_status(self):
+        got, errors = services.validate({'type': 'http', 'name': 'API', 'url': 'https://example.com/health', 'expect': '204'})
+        self.assertEqual(errors, {})
+        self.assertEqual(got['expect'], 204)
+        _, errors = services.validate({'type': 'http', 'name': 'API', 'url': 'https://example.com/', 'expect': '999'})
+        self.assertIn('expect', errors)
+
+    def test_save_adds_a_check_with_a_new_id_and_writes_the_list(self):
+        self.write_list([{'id': 3, 'name': 'Router', **PING}])
+        services.load(self.note)
+        row, errors = services.save_check({'name': 'NAS web', 'group': 'Services', 'type': 'http',
+                                           'url': 'http://192.0.2.10/', 'every': '60', 'retries': '2'}, self.note)
+        self.assertEqual(errors, {})
+        self.assertEqual(row['id'], 4)
+        got = self.read_list()
+        self.assertEqual([m['name'] for m in got], ['Router', 'NAS web'])
+        self.assertEqual(got[1]['id'], 4)
+        self.assertEqual(got[1]['url'], 'http://192.0.2.10/')
+        self.assertEqual(services.snapshot()[-1]['name'], 'NAS web')  # the running checks picked it up
+
+    def test_save_edits_a_check_and_keeps_its_id_and_place(self):
+        self.write_list([{'id': 1, 'name': 'First', **PING}, {'id': 2, 'name': 'Second', **PING}])
+        services.load(self.note)
+        row, errors = services.save_check({'id': 2, 'name': 'Renamed', 'group': 'Devices', 'type': 'ping',
+                                           'host': '192.0.2.9', 'every': 30, 'retries': 1}, self.note)
+        self.assertEqual(errors, {})
+        self.assertEqual(row['id'], 2)
+        got = self.read_list()
+        self.assertEqual([m['name'] for m in got], ['First', 'Renamed'])
+        self.assertEqual(got[1]['every'], 30)
+        self.assertEqual(got[1]['retries'], 1)
+
+    def test_save_refuses_a_check_that_is_not_there(self):
+        self.write_list([{'id': 1, 'name': 'First', **PING}])
+        services.load(self.note)
+        row, errors = services.save_check({'id': 99, 'name': 'X', 'type': 'ping', 'host': '192.0.2.1'}, self.note)
+        self.assertIsNone(row)
+        self.assertIn('id', errors)
+        self.assertEqual([m['id'] for m in self.read_list()], [1])
+
+    def test_save_makes_a_push_code_and_returns_the_url_and_curl(self):
+        self.write_list([{'id': 1, 'name': 'Router', **PING}])
+        services.load(self.note)
+        row, errors = services.save_check({'name': 'Backup', 'type': 'push', 'every': '7200', 'retries': '0'}, self.note)
+        self.assertEqual(errors, {})
+        code = services.read_codes(self.note)[str(row['id'])]
+        self.assertEqual(row['push'], f'/api/push/{code}')
+        self.assertEqual(row['url'], f'http://homeassistant.local:8790/api/push/{code}')
+        self.assertIn(f'curl "http://homeassistant.local:8790/api/push/{code}', row['curl'])
+        self.assertEqual(row['every'], 7200)
+
+    def test_a_new_code_changes_the_push_url(self):
+        self.write_list([{'id': 1, 'name': 'Backup', 'type': 'push', 'every': 7200}])
+        services.load(self.note)
+        old = services.codes['1']
+        row = services.new_code(1, self.note)
+        self.assertNotEqual(row['push'], f'/api/push/{old}')
+        self.assertEqual(row['push'], f"/api/push/{services.read_codes(self.note)['1']}")
+        self.assertIn(row['url'], row['curl'])
+        self.assertIsNone(services.new_code(99, self.note))   # not a check any more
+
+    def test_changing_a_push_check_away_from_push_drops_its_code(self):
+        self.write_list([{'id': 1, 'name': 'Backup', 'type': 'push', 'every': 7200}])
+        services.load(self.note)
+        self.assertIn('1', services.codes)
+        row, errors = services.save_check({'id': 1, 'name': 'Backup', 'type': 'ping', 'host': '192.0.2.1',
+                                           'every': 60, 'retries': 2}, self.note)
+        self.assertEqual(errors, {})
+        self.assertNotIn('1', services.read_codes(self.note))
+        self.assertNotIn('push', row)
+
+    def test_move_reorders_the_list_which_is_the_page_order(self):
+        self.write_list([{'id': 1, 'name': 'One', **PING}, {'id': 2, 'name': 'Two', **PING},
+                         {'id': 3, 'name': 'Three', **PING}])
+        services.load(self.note)
+        self.assertTrue(services.move_check(3, -1, self.note))
+        self.assertEqual([m['id'] for m in self.read_list()], [1, 3, 2])
+        self.assertTrue(services.move_check(1, 1, self.note))
+        self.assertEqual([m['id'] for m in self.read_list()], [3, 1, 2])
+        self.assertTrue(services.move_check(3, -1, self.note))   # already first: nothing to do
+        self.assertEqual([m['id'] for m in self.read_list()], [3, 1, 2])
+        self.assertFalse(services.move_check(99, 1, self.note))
+
+    def test_remove_drops_the_check_its_history_code_and_number(self):
+        self.write_list([{'id': 1, 'name': 'Keep', **PING}, {'id': 2, 'name': 'Backup', 'type': 'push', 'every': 7200}])
+        services.load(self.note)
+        services.log_event(NOW, 2, 'down', 'backup failed')
+        os.makedirs(services.CHECKS_DIR, exist_ok=True)
+        with open(os.path.join(services.CHECKS_DIR, f'{HOUR_AGO:%Y-%m}.csv'), 'w', encoding='utf-8') as f:
+            f.write('time,id,ok,checks,ms\n')
+            f.write(f'{HOUR_AGO:%Y-%m-%d %H:%M},1,5,5,10\n')
+            f.write(f'{HOUR_AGO:%Y-%m-%d %H:%M},2,4,5,12\n')
+        self.assertTrue(services.remove_check(2, self.note))
+        self.assertEqual([m['id'] for m in self.read_list()], [1])
+        self.assertNotIn('2', services.codes)
+        self.assertNotIn('2', services.read_codes(self.note))
+        events = self.read(os.path.join(services.EVENTS, f'{HOUR_AGO:%Y-%m}.csv'))
+        self.assertNotIn(',2,', events)
+        checks = self.read(os.path.join(services.CHECKS_DIR, f'{HOUR_AGO:%Y-%m}.csv'))
+        self.assertEqual(len(checks.splitlines()), 2)          # the header and check 1
+        self.assertEqual(services.removed_ids(), {2})
+        row, errors = services.save_check({'name': 'New', 'type': 'ping', 'host': '192.0.2.1'}, self.note)
+        self.assertEqual(errors, {})
+        self.assertEqual(row['id'], 3)                         # the removed number is never handed out again
+        self.assertFalse(services.remove_check(2, self.note))
+
+    def test_a_self_heal_check_without_an_app_gets_its_slugged_name_written_back(self):
+        self.write_list([{'id': 1, 'name': 'Media Hub', 'type': 'ping', 'host': '192.0.2.1', 'heal': True}])
+        services.load(self.note)
+        self.assertEqual(self.read_list()[0]['app'], 'media_hub')
+        self.assertIn('keeps its app', ' '.join(self.notes))
+
+    def test_renaming_a_self_heal_check_keeps_its_app_and_script(self):
+        self.write_list([{'id': 1, 'name': 'Media Hub', 'type': 'ping', 'host': '192.0.2.1', 'heal': True}])
+        services.load(self.note)
+        self.write_list([{'id': 1, 'name': 'Living room hub', 'type': 'ping', 'host': '192.0.2.1', 'heal': True,
+                          'app': 'media_hub'}])
+        services.load(self.note)
+        self.assertEqual(self.read_list()[0]['app'], 'media_hub')   # the app, and so the script, follows the id
+        self.assertEqual(services.app_name(services.monitors[0]), 'media_hub')
+        row, errors = services.save_check({'id': 1, 'name': 'Living room hub', 'type': 'ping', 'host': '192.0.2.1',
+                                           'heal': True, 'app': 'media_hub'}, self.note)
+        self.assertEqual(errors, {})
+        self.assertEqual(row['app'], 'media_hub')
+
+    def test_http_expect_requires_that_status(self):
+        class Reply:
+            status = 204
+            def __enter__(self):
+                return self
+            def __exit__(self, *args):
+                return False
+        with mock.patch.object(services.urllib.request, 'urlopen', return_value=Reply()):
+            self.assertEqual(services.check_http({'url': 'https://example.com/', 'expect': 204})[:2], (True, ''))
+            ok, detail, _ = services.check_http({'url': 'https://example.com/', 'expect': 200})
+        self.assertFalse(ok)
+        self.assertIn('expected 200', detail)
+
     # ---- a machine check: with no host it only watches the reports; with one it also pings the address ----
 
     def reported(self, ago, problems=None):
@@ -228,6 +412,102 @@ class Checks(unittest.TestCase):
                 self.assertEqual(services.status[1]['state'], expected)
                 self.assertEqual(services.status[1]['detail'], 'Not on the network')
         self.assertEqual(services.status[1]['ms'], 3000)  # and the check's page shows the ping time
+
+
+class Api(Helpers):
+    """The Checks screen's doors: anyone allowed may look, but only Home Assistant's ingress (a signed-in panel
+    request, which the Supervisor marks with X-Remote-User-Id) may change a check."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.server = ThreadingHTTPServer(('127.0.0.1', 0), watch.Handler)
+        cls.port = cls.server.server_address[1]
+        threading.Thread(target=cls.server.serve_forever, daemon=True).start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server.shutdown()
+        cls.server.server_close()
+
+    def call(self, path, body=None, ingress=False):
+        data = None if body is None else json.dumps(body).encode()
+        req = urllib.request.Request(f'http://127.0.0.1:{self.port}{path}', data=data,
+                                     method='POST' if data is not None else 'GET')
+        if data is not None:
+            req.add_header('Content-Type', 'application/json')
+        if ingress:
+            req.add_header('X-Remote-User-Id', 'test-user')
+        try:
+            with urllib.request.urlopen(req, timeout=5) as r:
+                return r.status, json.loads(r.read() or b'{}')
+        except urllib.error.HTTPError as e:
+            try:
+                return e.code, json.loads(e.read() or b'{}')
+            finally:
+                e.close()
+
+    def test_the_checks_list_is_readable_from_the_lan_but_not_editable(self):
+        self.write_list([{'id': 1, 'name': 'Router', **PING}])
+        services.load(self.note)
+        status, got = self.call('/api/checks')
+        self.assertEqual(status, 200)
+        self.assertFalse(got['can_edit'])
+        self.assertEqual([c['name'] for c in got['checks']], ['Router'])
+        self.assertEqual(got['groups'], [])
+        status, got = self.call('/api/checks', ingress=True)
+        self.assertEqual(status, 200)
+        self.assertTrue(got['can_edit'])
+
+    def test_a_change_without_the_ingress_header_is_refused(self):
+        self.write_list([{'id': 1, 'name': 'Router', **PING}])
+        services.load(self.note)
+        before = self.everything()
+        status, got = self.call('/api/checks/save', {'name': 'New', 'type': 'ping', 'host': '192.0.2.1'})
+        self.assertEqual(status, 403)
+        self.assertIn('panel', got['error'])
+        self.assertEqual(self.everything(), before)             # nothing was written
+        self.assertEqual([m['name'] for m in self.read_list()], ['Router'])
+
+    def test_save_from_ingress_adds_a_check_and_returns_its_push_url(self):
+        self.write_list([{'id': 1, 'name': 'Router', **PING}])
+        services.load(self.note)
+        status, got = self.call('/api/checks/save', {'name': 'Backup', 'group': 'Housekeeping', 'type': 'push',
+                                                    'every': '7200', 'retries': '0'}, ingress=True)
+        self.assertEqual(status, 200)
+        self.assertTrue(got['ok'])
+        self.assertTrue(got['push'].startswith('/api/push/'))
+        self.assertIn('curl', got)
+        self.assertEqual(got['check']['name'], 'Backup')
+        self.assertEqual([m['name'] for m in self.read_list()], ['Router', 'Backup'])
+
+    def test_bad_fields_come_back_next_to_the_field(self):
+        self.write_list([{'id': 1, 'name': 'Router', **PING}])
+        services.load(self.note)
+        status, got = self.call('/api/checks/save', {'name': 'Broken', 'type': 'ping'}, ingress=True)
+        self.assertEqual(status, 400)
+        self.assertIn('host', got['fields'])
+        self.assertEqual([m['name'] for m in self.read_list()], ['Router'])
+
+    def test_remove_from_ingress_drops_the_check_and_its_history(self):
+        self.write_list([{'id': 1, 'name': 'Router', **PING}])
+        services.load(self.note)
+        services.log_event(NOW, 1, 'down', 'no answer')
+        status, got = self.call('/api/checks/remove', {'id': 1}, ingress=True)
+        self.assertEqual(status, 200)
+        self.assertTrue(got['ok'])
+        self.assertEqual(self.read_list(), [])
+        self.assertNotIn(1, services.changes(30))
+        self.assertEqual(services.removed_ids(), {1})
+
+    def test_move_from_ingress_reorders_the_checks(self):
+        self.write_list([{'id': 1, 'name': 'One', **PING}, {'id': 2, 'name': 'Two', **PING}])
+        services.load(self.note)
+        status, _ = self.call('/api/checks/move', {'id': 2, 'by': -1}, ingress=True)
+        self.assertEqual(status, 200)
+        self.assertEqual([m['id'] for m in self.read_list()], [2, 1])
+        status, _ = self.call('/api/checks/move', {'id': 2, 'by': -1})   # the LAN may not move it
+        self.assertEqual(status, 403)
+        self.assertEqual([m['id'] for m in self.read_list()], [2, 1])
 
 
 if __name__ == '__main__':

@@ -1,10 +1,11 @@
-"""Home watch's service checks: ping, port, http, dns, dyndns, push and machine checks, on a list you edit by hand.
+"""Home watch's service checks: ping, port, http, dns, dyndns, push and machine checks, on the page's Checks screen.
 
-The list is /share/home-watch/monitors.json (plain, editable). A data folder with no list in it yet gets the example
-list shipped in addon/monitors.json; a list that is already there is never overwritten. Each check runs every
-`every` seconds:
-- ping: a device answers; port: a TCP port takes a connection; http: a page answers 200-299; dns: a DNS server
-  answers a name;
+The list is /share/home-watch/monitors.json (plain, so it can still be edited by hand and restarted). A data folder with
+no list in it yet gets the example list shipped in addon/monitors.json; a list that is already there is never
+overwritten. The page's Checks screen validates a check, writes the list whole (a temp file, then a rename) and puts it
+in front of the running checks at once, so nothing needs a restart. Each check runs every `every` seconds:
+- ping: a device answers; port: a TCP port takes a connection; http: a page answers 200-299 (or the exact status in
+  `expect`); dns: a DNS server answers a name;
 - push: something else reports in at /api/push/<code>?status=up&msg=..., and silence longer than `every` = down;
 - machine (Home watch's own): one of its machines reported within `quiet` seconds (15 min if not set) with no problem.
   A machine check may also name a `host`: each round it then pings that address the way a ping check does, and is down
@@ -68,6 +69,10 @@ KEEP_MONTHS = 12
 FLUSH = 300  # seconds between rows in the checks file
 DEFAULT_LIST = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'monitors.json')
 HEAL_SCRIPT = 'script.home_watch_heal_{app}'  # the Home Assistant script self-heal calls; {app} = the check's app
+REMOVED = f'{DATA}/removed-ids.json'  # ids of checks removed on the page, so a new check never takes one
+TYPES = ('ping', 'port', 'http', 'dns', 'dyndns', 'push', 'machine')
+FORM_FIELDS = ('name', 'group', 'type', 'host', 'port', 'url', 'expect', 'name_to_look_up', 'server', 'hostname',
+               'machine', 'quiet', 'every', 'retries', 'off_ok', 'heal', 'app')
 
 lock = threading.Lock()
 monitors = []
@@ -118,10 +123,29 @@ def whole(value):
     return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else None
 
 
+def removed_ids():
+    """The ids of checks taken off the page: kept in removed-ids.json so a new check never inherits a removed one's
+    number, even though its history rows are gone. A missing or unreadable file is an empty set."""
+    try:
+        with open(REMOVED, encoding='utf-8') as f:
+            got = json.load(f)
+    except (OSError, ValueError):
+        return set()
+    if not isinstance(got, list):
+        return set()
+    return {int(i) for i in got if str(i).strip().isdigit()}
+
+
+def remember_removed(cid):
+    """Keep a removed check's number for good, so nothing is ever handed it again."""
+    save(REMOVED, json.dumps(sorted(removed_ids() | {cid})) + '\n')
+
+
 def stored_ids():
-    """The ids any stored row already carries: a check's number is never handed out twice, so a check removed long
-    ago cannot pass its history to a new one. Read only when a number has to be made."""
-    found = set()
+    """The ids any stored row already carries, plus every id a check was ever removed with: a check's number is never
+    handed out twice, so a check removed long ago cannot pass its history to a new one. Read only when a number has to
+    be made."""
+    found = removed_ids()
     for folder in (EVENTS, CHECKS_DIR):
         for f in months(folder):
             with open(f'{folder}/{f}', newline='', encoding='utf-8') as fh:
@@ -206,6 +230,13 @@ def load(note=None):
             continue
         seen[m['id']] = label
         kept.append(m)
+    apps = False
+    for m in kept:  # a self-heal check keeps its app, so a later rename still calls the same script
+        if m.get('heal') and not str(m.get('app') or '').strip():
+            got = app_name(m)
+            if got:
+                m['app'] = got
+                apps = True
     moved = made = False
     for m in kept:
         if 'token' in m:  # the old place for a push check's code, or where one copy of the list still keeps it
@@ -230,9 +261,12 @@ def load(note=None):
             known[str(m['id'])] = secrets.token_hex(16)
             note(f"push check {m.get('name', m['id'])}: no code yet, so one was made (see push-codes.json)")
             made = True
-    if changed:
+    if changed or apps:
         save(LIST, show_list(kept))
-        note(f"monitors.json: every check now has its id ({len(kept)} checks)")
+        if changed:
+            note(f"monitors.json: every check now has its id ({len(kept)} checks)")
+        if apps:
+            note("monitors.json: every self-heal check now keeps its app, so a rename keeps the same script")
     if moved:
         note("push-codes.json: each push code is kept under its check's id now")
     if moved or made:
@@ -243,6 +277,327 @@ def load(note=None):
         monitors[:] = kept
         for m in kept:
             status.setdefault(m['id'], {'state': 'waiting', 'since': time.time(), 'detail': '', 'fails': 0, 'last': 0})
+
+
+# ---- the Checks screen: check the fields, save, reorder, remove ----
+
+def slug(text):
+    """An app name as the self-heal script needs it: lowercase, letters and digits, runs of anything else made one
+    underscore ("Media Hub" -> media_hub)."""
+    return re.sub(r'[^a-z0-9]+', '_', str(text or '').lower()).strip('_')
+
+
+def machine_slug(text):
+    """A machine id as watch.py makes it from a report: lowercase letters, digits and hyphens."""
+    return re.sub(r'[^a-z0-9-]', '', str(text or '').lower())
+
+
+def _text(raw, key, limit):
+    return str(raw.get(key) or '').strip()[:limit]
+
+
+def _whole(raw, key, low, high, default):
+    """(number, error): a whole number in range, `default` when the field is empty."""
+    value = raw.get(key)
+    if value is None or str(value).strip() == '':
+        return default, None
+    try:
+        got = float(str(value).strip())
+    except (TypeError, ValueError):
+        return None, f'Use a whole number from {low} to {high}.'
+    if got != int(got) or not low <= int(got) <= high:
+        return None, f'Use a whole number from {low} to {high}.'
+    return int(got), None
+
+
+def _flag(raw, key):
+    value = raw.get(key)
+    return value is True or str(value).strip().lower() in ('1', 'true', 'yes', 'on')
+
+
+def validate(raw, current=None):
+    """The Checks screen's fields -> (check, errors). `errors` maps a field to the sentence shown next to it; an
+    empty `errors` means the check is ready to save. `current` is the check being edited, None for a new one. Only the
+    fields the chosen type reads are kept, so changing type leaves nothing stale behind."""
+    errors = {}
+    kind = str(raw.get('type') or '').strip()
+    if kind not in TYPES:
+        errors['type'] = 'Pick a check type.'
+        kind = 'ping'  # keep checking the rest of the form
+    name = _text(raw, 'name', 80)
+    if not name:
+        errors['name'] = 'Give the check a name.'
+    out = {'name': name or 'Check', 'type': kind}
+    group = _text(raw, 'group', 60)
+    if group:
+        out['group'] = group
+    every, bad = _whole(raw, 'every', 5, 86400, 300 if kind == 'push' else 1800 if kind == 'dyndns' else 60)
+    if bad:
+        errors['every'] = bad
+    else:
+        out['every'] = every
+    retries, bad = _whole(raw, 'retries', 0, 20, 0 if kind == 'push' else 2)
+    if bad:
+        errors['retries'] = bad
+    else:
+        out['retries'] = retries
+    host = _text(raw, 'host', 200)
+    if kind == 'ping':
+        if not host:
+            errors['host'] = 'The address or name to ping.'
+        else:
+            out['host'] = host
+    elif kind == 'port':
+        if not host:
+            errors['host'] = 'The address or name of the device.'
+        else:
+            out['host'] = host
+        port, bad = _whole(raw, 'port', 1, 65535, None)
+        if bad or port is None:
+            errors['port'] = bad or 'The TCP port to connect to (1-65535).'
+        else:
+            out['port'] = port
+    elif kind == 'http':
+        url = _text(raw, 'url', 500)
+        if not url:
+            errors['url'] = 'The page to fetch, starting with http:// or https://.'
+        elif not url.lower().startswith(('http://', 'https://')):
+            errors['url'] = 'Start the URL with http:// or https://.'
+        else:
+            out['url'] = url
+        expect, bad = _whole(raw, 'expect', 100, 599, None)
+        if bad:
+            errors['expect'] = bad
+        elif expect is not None:
+            out['expect'] = expect
+    elif kind == 'dns':
+        look = _text(raw, 'name_to_look_up', 200)
+        if not look:
+            errors['name_to_look_up'] = 'The name the DNS server should answer.'
+        else:
+            out['name_to_look_up'] = look
+        server = _text(raw, 'server', 200)
+        if not server:
+            errors['server'] = 'The DNS server to ask.'
+        else:
+            out['server'] = server
+        port, bad = _whole(raw, 'port', 1, 65535, 53)
+        if bad:
+            errors['port'] = bad
+        else:
+            out['port'] = port
+    elif kind == 'dyndns':
+        hostname = _text(raw, 'hostname', 200)
+        if not hostname:
+            errors['hostname'] = 'The dynamic-DNS name to check.'
+        else:
+            out['hostname'] = hostname
+    elif kind == 'machine':
+        mid = machine_slug(_text(raw, 'machine', 60))
+        if not mid:
+            errors['machine'] = 'Pick a machine that has reported, or type its id.'
+        else:
+            out['machine'] = mid
+        if host:
+            out['host'] = host
+        quiet, bad = _whole(raw, 'quiet', 60, 86400, 900)
+        if bad:
+            errors['quiet'] = bad
+        else:
+            out['quiet'] = quiet
+    # a push check needs nothing beyond the common fields: something else calls its path
+    if kind != 'machine':
+        asked = _text(raw, 'machine', 60)
+        mid = machine_slug(asked)
+        if asked and not mid:
+            errors['machine'] = 'Use lowercase letters, digits and hyphens for a machine id.'
+        elif mid:
+            out['machine'] = mid
+    if _flag(raw, 'off_ok'):
+        out['off_ok'] = True
+    if _flag(raw, 'heal'):
+        out['heal'] = True
+        app = slug(_text(raw, 'app', 60)) or app_name({'name': name})
+        if not app:
+            errors['app'] = 'Name the app the self-heal script restarts.'
+        else:
+            out['app'] = app
+    return out, errors
+
+
+def save_check(raw, note=None):
+    """The Checks screen's save: check the fields, then write monitors.json whole (an edited check keeps its id, a new
+    one gets the next free number, never shown) and put the new list in front of the running checks at once. Returns
+    (the check as the page shows it, field -> error); the errors are empty when it was saved."""
+    note = note or (lambda text: None)
+    current = None
+    if str(raw.get('id') or '').strip():
+        try:
+            cid = int(str(raw['id']).strip())
+        except (TypeError, ValueError):
+            return None, {'id': 'This check is not one the hub knows; reload the page.'}
+        with lock:
+            current = next((m for m in monitors if m['id'] == cid), None)
+        if current is None:
+            return None, {'id': 'This check has gone; reload the page.'}
+    found, errors = validate(raw, current)
+    if errors:
+        return None, errors
+    with lock:
+        if current is not None:
+            found['id'] = current['id']
+            index = monitors.index(current)
+            found_list = list(monitors)
+            found_list[index] = found
+        else:
+            known = set(codes) | {str(i) for i in stored_ids()}
+            found['id'] = next_number({m['id'] for m in monitors}, known)
+            found_list = list(monitors) + [found]
+        new_codes = dict(codes)
+        made = ''
+        if found['type'] == 'push' and not new_codes.get(str(found['id'])):
+            new_codes[str(found['id'])] = secrets.token_hex(16)
+            made = 'made'
+        elif found['type'] != 'push' and current and current.get('type') == 'push' and str(found['id']) in new_codes:
+            new_codes.pop(str(found['id']))
+            made = 'dropped'
+        codes_text = json.dumps(new_codes, indent=2, sort_keys=True) + '\n' if made else None
+    save(LIST, show_list(found_list))
+    if codes_text:
+        save(CODES, codes_text)
+    with lock:
+        monitors[:] = found_list
+        if made:
+            codes.clear()
+            codes.update(new_codes)
+        status.setdefault(found['id'], {'state': 'waiting', 'since': time.time(), 'detail': '', 'fails': 0, 'last': 0})
+        row = check_row(found)
+    cache.clear()
+    if made == 'made':
+        note(f"push check {found['name']}: a code was made (see push-codes.json)")
+    elif made == 'dropped':
+        note(f"check {found['name']}: no longer a push check, so its push code was dropped")
+    note(f"check {found['name']}: saved")
+    return row, {}
+
+
+def move_check(cid, by, note=None):
+    """Move a check up (-1) or down (+1) in the list, which is the order the page shows."""
+    note = note or (lambda text: None)
+    with lock:
+        ids = [m['id'] for m in monitors]
+        if cid not in ids:
+            return False
+        i = ids.index(cid)
+        j = max(0, min(len(ids) - 1, i + int(by)))
+        if i == j:
+            return True
+        found = list(monitors)
+        found.insert(j, found.pop(i))
+        text = show_list(found)
+    save(LIST, text)
+    with lock:
+        monitors[:] = found
+    note(f"check {found[j].get('name')}: moved {'up' if j < i else 'down'}")
+    return True
+
+
+def drop_history(cid):
+    """Remove a check's rows from every month of services/ and checks/: its outages, uptime and response times."""
+    want = str(cid)
+    for folder in (EVENTS, CHECKS_DIR):
+        for name in months(folder):
+            path = f'{folder}/{name}'
+            with open(path, newline='', encoding='utf-8') as fh:
+                rows = list(csv.reader(fh))
+            if not rows:
+                continue
+            left = [rows[0]] + [r for r in rows[1:] if not (len(r) > 1 and r[1] == want)]
+            if len(left) == len(rows):
+                continue
+            buf = io.StringIO()
+            csv.writer(buf, lineterminator='\n').writerows(left)
+            save(path, buf.getvalue())
+
+
+def remove_check(cid, note=None):
+    """Take a check off the list, drop its push code and every stored row it has, and remember its id so no new check
+    ever takes it."""
+    note = note or (lambda text: None)
+    with lock:
+        m = next((m for m in monitors if m['id'] == cid), None)
+        if m is None:
+            return False
+        left = [x for x in monitors if x['id'] != cid]
+        new_codes = {k: v for k, v in codes.items() if k != str(cid)}
+        code_gone = str(cid) in codes
+        text = show_list(left)
+        codes_text = json.dumps(new_codes, indent=2, sort_keys=True) + '\n' if code_gone else None
+    save(LIST, text)
+    if codes_text:
+        save(CODES, codes_text)
+    with lock:
+        monitors[:] = left
+        if code_gone:
+            codes.clear()
+            codes.update(new_codes)
+        status.pop(cid, None)
+        pushes.pop(cid, None)
+        samples.pop(cid, None)
+    remember_removed(cid)
+    drop_history(cid)
+    cache.clear()
+    note(f"check {m.get('name')}: removed, with its stored history")
+    return True
+
+
+def new_code(cid, note=None):
+    """Make a push check a fresh code (its old URL stops working), save it, and return the check with its new path."""
+    note = note or (lambda text: None)
+    with lock:
+        m = next((m for m in monitors if m['id'] == cid and m.get('type') == 'push'), None)
+        if m is None:
+            return None
+        new_codes = dict(codes)
+        new_codes[str(cid)] = secrets.token_hex(16)
+        text = json.dumps(new_codes, indent=2, sort_keys=True) + '\n'
+    save(CODES, text)
+    with lock:
+        codes.clear()
+        codes.update(new_codes)
+        row = check_row(m)
+    note(f"push check {m.get('name')}: a new code was made (see push-codes.json)")
+    return row
+
+
+def push_info(m):
+    """A push check's path and a one-line curl example: the code travels in the path, never in monitors.json."""
+    code = codes.get(str(m['id']))
+    if not code or m.get('type') != 'push':
+        return {}
+    path = f'/api/push/{code}'
+    return {'push': path, 'url': f'http://homeassistant.local:8790{path}',
+            'curl': f'curl "http://homeassistant.local:8790{path}?status=up&msg=done"'}
+
+
+def check_row(m):
+    """One check as the Checks screen edits it: every field the form shows, its live state, and a push check's path."""
+    row = {'id': m['id'], 'name': m.get('name') or str(m['id']), 'type': m.get('type', '')}
+    for key in FORM_FIELDS:
+        if key in m and m[key] not in ('', None):
+            row[key] = m[key]
+    row.update(status.get(m['id'], {}))
+    row.update(push_info(m))
+    return row
+
+
+def checks_payload(can_edit=False):
+    """Everything the Checks screen needs: each check as the form edits it, the groups already in use, and whether
+    this request may change anything (only Home Assistant's ingress may)."""
+    with lock:
+        rows = [check_row(m) for m in monitors]
+        groups = sorted({m['group'] for m in monitors if m.get('group')})
+    return {'checks': rows, 'groups': groups, 'can_edit': bool(can_edit)}
 
 
 # ---- the checks: each returns (ok, detail, milliseconds) ----
@@ -261,6 +616,7 @@ def check_port(m):
 
 
 def check_http(m):
+    """The page answers: any 200-299, or the exact status in `expect` when the check names one."""
     started = time.time()
     req = urllib.request.Request(m['url'], headers={'User-Agent': 'Home watch'})
     try:
@@ -268,8 +624,13 @@ def check_http(m):
             code = r.status
     except urllib.error.HTTPError as e:
         code = e.code
-    ok = 200 <= code < 300
-    return ok, '' if ok else f'answered {code}', (time.time() - started) * 1000
+    try:
+        want = int(m['expect']) if m.get('expect') not in (None, '') else None
+    except (TypeError, ValueError):
+        want = None
+    ok = code == want if want is not None else 200 <= code < 300
+    return ok, '' if ok else (f'answered {code}, expected {want}' if want is not None else f'answered {code}'), \
+        (time.time() - started) * 1000
 
 
 def check_dns(m):
@@ -349,6 +710,9 @@ def run_one(m, options, note):
         ok, detail, ms = False, str(e)[:120] or type(e).__name__, 0
     now = time.time()
     with lock:
+        s = status.get(cid)
+        if s is None:  # taken off the list while this round was running
+            return
         if ok is not None:
             got = samples.setdefault(cid, [0, 0, 0.0, 0])
             got[1] += 1
@@ -357,7 +721,6 @@ def run_one(m, options, note):
                 if ms:
                     got[2] += ms
                     got[3] += 1
-        s = status[cid]
         s['last'], s['ms'] = now, round(ms)
         old = s['state']
         if ok is None:  # a push monitor nothing has reported to yet, or a machine with no report yet
@@ -483,7 +846,7 @@ def snapshot():
 def flush(now):
     """One row per check for the last 5 minutes: how many of its checks passed and its average response time."""
     with lock:
-        got = dict(samples)
+        got = {cid: sample for cid, sample in samples.items() if cid in status}  # a removed check writes nothing
         samples.clear()
     if not got:
         return

@@ -295,6 +295,29 @@ def loop():
 
 # ---- the page and the report door ---------------------------------------------------------------------------------
 
+def ingress_request(headers):
+    """Whether Home Assistant's ingress proxied this request for a signed-in user. The Supervisor adds
+    X-Remote-User-Id itself and strips any copy a client sent, so only a request carrying it may change the checks;
+    the add-on's own port (and every other address) can view them but not change them."""
+    return bool(str(headers.get('X-Remote-User-Id') or '').strip())
+
+
+def checks_payload(can_edit):
+    """The Checks screen: the checks as the form edits them, the groups in use, the machines that have reported (to
+    pick from) and whether this request may change anything."""
+    body = services.checks_payload(can_edit)
+    with lock:
+        found = {}
+        for machine, m in state['machines'].items():
+            found[machine] = {'id': machine, 'name': labels.get(machine) or m.get('name') or machine}
+        for row in body['checks']:
+            machine = row.get('machine')
+            if machine and machine not in found:
+                found[machine] = {'id': machine, 'name': machine}
+        body['machines'] = [found[k] for k in sorted(found, key=lambda k: (order.index(k) if k in order else len(order), k))]
+    return body
+
+
 def log_rows():
     """What the page's Logs section lists: every machine with saved syslog files in the page's machine order, then the
     hub's own log (trail.OWN_ID) - each with the time of its newest line, or None where it has none yet."""
@@ -339,14 +362,60 @@ class Handler(BaseHTTPRequestHandler):
             self.rfile.readline()
 
     def do_POST(self):
-        if not self.client_address[0].startswith(networks) or urlparse(self.path).path.rstrip('/').split('/')[-1] != 'report':
+        if not self.client_address[0].startswith(networks):
             return self.reply(403, {'error': 'no'})
+        parts = urlparse(self.path).path.rstrip('/').split('/')
+        last = parts[-1]
+        if last == 'report':
+            try:
+                take_report(json.loads(self.body() or b'{}'))
+                self.reply(200, {'ok': True})
+            except Exception as e:
+                note(f"bad report from {self.client_address[0]}: {e}")
+                self.reply(400, {'error': str(e)})
+            return
+        if len(parts) >= 3 and parts[-3] == 'api' and parts[-2] == 'checks':
+            # The Checks screen changes the list. Only Home Assistant's ingress may: that is the signed-in panel.
+            if not ingress_request(self.headers):
+                return self.reply(403, {'error': 'Checks can only be changed from the Home Assistant panel.'})
+            try:
+                body = json.loads(self.body() or b'{}')
+            except ValueError as e:
+                return self.reply(400, {'error': f'bad JSON: {e}'})
+            if not isinstance(body, dict):
+                return self.reply(400, {'error': 'send a JSON object'})
+            return self.check_change(last, body)
+        return self.reply(404, {'error': 'no'})
+
+    def check_change(self, action, body):
+        """One change from the Checks screen: save (add or edit), remove, move up/down, or a new push code."""
         try:
-            take_report(json.loads(self.body() or b'{}'))
-            self.reply(200, {'ok': True})
-        except Exception as e:
-            note(f"bad report from {self.client_address[0]}: {e}")
-            self.reply(400, {'error': str(e)})
+            cid = int(str(body.get('id')).strip()) if str(body.get('id') or '').strip() else None
+        except (TypeError, ValueError):
+            cid = None
+        if action == 'save':
+            row, errors = services.save_check(body, note)
+            if errors:
+                return self.reply(400, {'error': 'Please fix the fields marked.', 'fields': errors})
+            return self.reply(200, {'ok': True, 'check': row, **{k: row[k] for k in ('push', 'url', 'curl') if k in row}})
+        if action == 'remove':
+            if cid is None or not services.remove_check(cid, note):
+                return self.reply(404, {'error': 'No such check.'})
+            return self.reply(200, {'ok': True})
+        if action == 'move':
+            try:
+                by = int(body.get('by', 0))
+            except (TypeError, ValueError):
+                by = 0
+            if cid is None or by not in (-1, 1) or not services.move_check(cid, by, note):
+                return self.reply(404, {'error': 'No such check.'})
+            return self.reply(200, {'ok': True})
+        if action == 'code':
+            row = services.new_code(cid, note) if cid is not None else None
+            if not row:
+                return self.reply(404, {'error': 'No such push check.'})
+            return self.reply(200, {'ok': True, 'check': row, **{k: row[k] for k in ('push', 'url', 'curl') if k in row}})
+        return self.reply(404, {'error': 'no'})
 
     def do_GET(self):
         if not self.client_address[0].startswith(networks):
@@ -374,6 +443,8 @@ class Handler(BaseHTTPRequestHandler):
         if last == 'services':
             uptime, strips = services.summary()
             return self.reply(200, {'monitors': services.snapshot(), 'uptime': uptime, 'strips': strips})
+        if last == 'checks':
+            return self.reply(200, checks_payload(ingress_request(self.headers)))
         if last == 'logs':
             return self.reply(200, {'logs': log_rows()})
         if last in ('check', 'outages', 'history'):

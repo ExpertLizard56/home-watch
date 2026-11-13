@@ -17,9 +17,9 @@ Assistant, and sends an alert through a webhook. It needs no cloud account and n
 - Alerts at most once a day per problem; a problem that clears can alert again if it comes back.
 - A machine that stops reporting (6 hours by default) is a problem too.
 - The add-on reports on itself: space, how much its card writes, and the kernel's SD card errors since boot.
-- Service checks written by hand in a plain JSON file: ping, TCP port, HTTP, DNS, a dynamic-DNS name still matching your
-  public IP, "one of my machines reported lately" (and, given its address, still on the network), and push checks (see
-  below).
+- A **Checks** screen to add, change, reorder and remove service checks without a restart: ping, TCP port, HTTP, DNS, a
+  dynamic-DNS name still matching your public IP, "one of my machines reported lately" (and, given its address, still on
+  the network), and push checks (see below). The list is still a plain JSON file if you prefer to edit it by hand.
 
 Everything is kept in `/share/home-watch` as plain files: a CSV history per machine (one row every 5 minutes, 12 months
 kept), the check list, the settings, and a log.
@@ -77,9 +77,11 @@ is normal; it is read when the add-on starts, so restart the add-on after editin
   5514).
 - `allowed_networks` lists the address prefixes allowed to post reports and open the page.
 
-**`/share/home-watch/monitors.json`** is the service check list. The add-on writes the example list there on its first
-start and never overwrites it (except to add an `id` to a check that has none). One check per line, edit by hand,
-restart the add-on:
+**`/share/home-watch/monitors.json`** is the service check list. The page's **Checks** screen (below) is the main way
+to change it: it writes the file for you, keeps each check's `id`, and the running checks pick the change up without a
+restart. The file is still plain JSON, one check per line, so editing it by hand and restarting works too. On a
+hand-edited list the add-on only writes it back to add a missing `id` (and an `app` for a self-heal check that has
+none):
 
 ```json
 [
@@ -106,7 +108,32 @@ its reporter still sending. It is then down with `Not on the network` when the a
 `On the network, but its reporter stopped sending` when the address answers but the report is stale. Its response time
 is the ping time. Without `host` the check only watches the reports.
 
+An `http` check counts any 200-299 answer as up; add `"expect": 204` (or another code) to require exactly that status.
+`"heal": true` with an `"app"` makes the check a candidate for self-heal: Home Assistant runs
+`script.home_watch_heal_<app>` when it goes down or comes back. A self-heal check with no `app` gets one made from its
+name on start, so renaming it later still calls the same script.
+
 The example list in `addon/monitors.json` in this repository has one of every type.
+
+## The Checks screen
+
+Open **Checks** on the page (the button at the top right of the overview). It is the main way to change the list:
+
+- the checks in the order the page shows them, with their group, type and state, and buttons to move one up or down,
+  edit it, or remove it. Removing asks first and deletes that check's stored history too;
+- an Add/Edit form that shows only the fields the chosen type uses, each with a one-line hint, and says what is wrong
+  next to the field before anything is saved;
+- after saving a push check, the URL to call and a one-line `curl` example, with a button to make a new code (the old
+  URL then stops working);
+- for a machine check, a picker of the machines that have reported (or type an id for one that has not), an optional
+  address to ping too, and the quiet time. It is green only when the device answers the ping (if a host is set) **and**
+  its reporter has sent within the quiet time;
+- a short "Make your own reporter" panel with the `/report` URL and the JSON it accepts.
+
+Changing checks is only allowed from Home Assistant's panel (the sidebar), because that is signed in. Opening the page
+on port 8790 still shows everything, but refuses a change. Saving writes `monitors.json` at once and the running checks
+pick it up without a restart; the hidden `id` of an edited check is kept, and a new check gets a new one that is never
+reused.
 
 ## Reporters
 
@@ -159,7 +186,7 @@ machine without a reporter.
 {"id": 3, "name": "Nightly backup", "group": "Housekeeping", "type": "push", "every": 7200, "retries": 0}
 ```
 
-Restart the add-on, open that check's page from Home Watch, and copy the push path it shows. Call it when the job
+Add it on the Checks screen (or in the file, then restart), and copy the push path it shows. Call it when the job
 finishes, from anywhere on your home network:
 
 ```sh
@@ -167,9 +194,9 @@ curl "http://homeassistant.local:8790/api/push/<code>?status=up&msg=backup%20don
 ```
 
 No news for longer than `every` seconds (plus a 30-second grace) makes the check down; send `status=down` to report a
-failure. The codes are made on first start and kept in `/share/home-watch/push-codes.json` under each check's id, not
-in `monitors.json`, and a check's page is where you copy its push path from. The path carries the code, not the name,
-so renaming the check does not change it.
+failure. The codes are made when a push check is added and kept in `/share/home-watch/push-codes.json` under each
+check's id, not in `monitors.json`; the Checks screen and the check's own page both show the push path to copy. The path
+carries the code, not the name, so renaming the check does not change it, and the Checks screen can make a new code.
 
 ## What it needs
 

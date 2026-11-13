@@ -23,8 +23,8 @@ That base image is published for aarch64, amd64 and armv7, which is why `config.
   event and per-check CSVs, uptime/strips/outages, the push codes and self-heal.
 - `trail.py` — the busiest programs every Linux report carries, the syslog lines machines send in, and the range the
   page's Logs section downloads (a `.log` for one machine, a `.zip` of one each for several).
-- `page.html` — the page: one file, plain SVG, no libraries. Three views (everything, one machine, one check), routed
-  by the URL fragment (`#<machine>`, `#check:<id>`).
+- `page.html` — the page: one file, plain SVG, no libraries. Four views (everything, one machine, one check, the checks
+  editor), routed by the URL fragment (`#<machine>`, `#check:<id>`, `#checks:`).
 - `config.yaml` — the add-on's metadata and its few options (see version bumps). `settings.example.json` and
   `monitors.json` are generic examples; `services.py` copies `monitors.json` into a data folder that has no check list
   yet, and never over one that is already there.
@@ -65,6 +65,8 @@ Everything lives in `/share/home-watch` (`HOME_WATCH_DATA` moves it), as plain f
 - `log.txt` — the add-on's own log (it also goes to stdout).
 - `monitors.json` — the check list (below); `settings.json` — the house's own names and numbers (below).
 - `push-codes.json` — the push checks' codes, `{"<check id>": "<code>"}`, written whole at 0600.
+- `removed-ids.json` — the ids of checks taken off the Checks screen, so a new check never takes one even though the
+  removed check's history rows are gone.
 
 Once a day the add-on drops the months each folder does not keep.
 
@@ -121,6 +123,19 @@ every other field. Name-keyed data moves to that check's id in the same start �
 once: a second start changes nothing. A duplicate id is an error logged by the check's name, and the later check is
 skipped, never merged.
 
+### The Checks screen
+
+`GET /api/checks` gives the page every check as the form edits it, the groups in use, the machines that have reported and
+whether the request may change anything. The changes themselves are `POST /api/checks/save`, `/remove`, `/move` (by
+-1/+1) and `/code` (a new push code); all four are refused unless the request carries Home Assistant's
+`X-Remote-User-Id` header, which the Supervisor adds to ingress requests and strips from anything a client sent, so the
+add-on's own port can view the list but not change it. `services.validate` checks every field and returns field -> a
+sentence for the form; `services.save_check` writes `monitors.json` whole (an edit keeps its id, a new check gets the
+next free one) and puts the new list in front of the running checks at once. Removing a check drops its code and its
+rows in `services/` and `checks/`, and keeps its number in `removed-ids.json`. An `http` check's `expect` names one exact
+status instead of any 200-299. On start, a `heal` check with no `app` gets its name's slug written in as `app`, so a
+later rename still calls the same self-heal script.
+
 ### Push codes
 
 The codes are **not** in `monitors.json`: that list is a plain file anyone may copy or commit, and a code in it would be
@@ -130,6 +145,8 @@ names the check, never the code. A list still carrying a code in a `"token"` fie
 to `push-codes.json` under the check's id and out of the list. A code kept under a name from before ids moves to the id
 too. Arriving codes are compared with `hmac.compare_digest`, so neither a wrong code nor the time an answer took says
 anything about the right one. A check's own page shows its push path to copy; the path carries the code, not the name.
+The Checks screen shows the same path (with a one-line curl example) after saving a push check, and its button makes a
+new code, which stops the old path working.
 
 ### Alerts and self-heal
 
@@ -161,13 +178,18 @@ with no date keep the date of the line above them. One machine comes back as a `
 ### The page and its API
 
 `GET /` serves `page.html`; every other GET is one of `/api/status` (state, order, labels), `/api/services` (each
-check, its id, its uptime and its 24-hour strip), `/api/history?machine=&days=`, `/api/check?id=&days=`,
-`/api/outages?days=`, `/api/log?machine=`, `/api/logs` (the machines with saved syslog files, plus the hub's own log)
-and `/api/logs/download?machines=&days=`, which answers as an attachment: a `.log`, or a `.zip` for several, with
-`days` 0 meaning everything kept. Only the names `/api/logs` itself listed are accepted, so no path comes from the page.
-Days are clamped to 1-366 (log ranges to 0-366) and the graphs are averaged into about 300 points so a year draws as
-fast as a day. Both doors — the reports and the page — refuse any address that does not start with one of
-`allowed_networks`. The page also answers on Home Assistant's ingress, so it can sit in the sidebar.
+check, its id, its uptime and its 24-hour strip), `/api/checks` (the Checks screen: every check as the form edits it,
+the groups, the machines and whether this request may change anything), `/api/history?machine=&days=`,
+`/api/check?id=&days=`, `/api/outages?days=`, `/api/log?machine=`, `/api/logs` (the machines with saved syslog files,
+plus the hub's own log) and `/api/logs/download?machines=&days=`, which answers as an attachment: a `.log`, or a `.zip`
+for several, with `days` 0 meaning everything kept. Only the names `/api/logs` itself listed are accepted, so no path
+comes from the page. Days are clamped to 1-366 (log ranges to 0-366) and the graphs are averaged into about 300 points
+so a year draws as fast as a day. Both doors — the reports and the page — refuse any address that does not start with
+one of `allowed_networks`. The page also answers on Home Assistant's ingress, so it can sit in the sidebar.
+
+The Checks screen's four changes are `POST /api/checks/save`, `/remove`, `/move` and `/code`. They are refused (403)
+unless the request carries `X-Remote-User-Id`, the header the Supervisor adds to an ingress request and strips from any
+copy a client sent; so the add-on's own port is read-only, and only the signed-in panel can change a check.
 
 ## The checks
 
@@ -216,10 +238,13 @@ logged and skipped; the rest of the add-on must still work. A reporter can also 
   fix what it printed; never skip it (`--no-verify`, `LEFTHOOK=0`).
 - `cd addon && python -m unittest test_logs test_services` — two test files: `test_logs` for the Logs section's range
   cut and its `.log` / `.zip`, `test_services` for the checks' ids (the upgrade, history and codes moving to the id, a
-  rename, a duplicate id, a second start changing nothing) and for a machine check with and without a `host` (its three
-  states, retries, and the ping time as its response time). Both use a temporary data folder, so they need nothing
-  else. Otherwise the cheapest proof of a change is ruff plus the local run above: start it on an empty data folder,
-  post a report, fetch `/api/status`, `/api/services` and one graph. `python -m py_compile addon/*.py` catches a file
+  rename, a duplicate id, a second start changing nothing), for a machine check with and without a `host` (its three
+  states, retries, and the ping time as its response time), for the Checks screen's validation, save, reorder and remove
+  (the id tombstone and the dropped history), for the self-heal `app` that survives a rename, and for the API's
+  ingress-only rule (the same list served read-only over the LAN, a change refused without `X-Remote-User-Id`). Both use
+  a temporary data folder, so they need nothing else. Otherwise the cheapest proof of a change is ruff plus the local
+  run above: start it on an empty data folder, post a report, fetch `/api/status`, `/api/services` and one graph.
+  `python -m py_compile addon/*.py` catches a file
   that will not even import, and if `page.html`'s script changed, `node --check` the script on its own (it is one
   `<script>` block, and the page has no build step).
 
