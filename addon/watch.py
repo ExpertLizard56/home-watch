@@ -295,16 +295,34 @@ def loop():
 
 # ---- the page and the report door ---------------------------------------------------------------------------------
 
+def log_rows():
+    """What the page's Logs section lists: every machine with saved syslog files in the page's machine order, then the
+    hub's own log (trail.OWN_ID) - each with the time of its newest line, or None where it has none yet."""
+    out = []
+    for machine, at in trail.saved():
+        if machine == trail.OWN_ID:
+            out.append((1, 0, {'id': machine, 'name': trail.OWN_NAME, 'last': at.timestamp() if at else None}))
+            continue
+        with lock:
+            name = labels.get(machine) or (state['machines'].get(machine) or {}).get('name') or machine
+        out.append((0, order.index(machine) if machine in order else len(order),
+                    {'id': machine, 'name': name, 'last': at.timestamp() if at else None}))
+    out.sort(key=lambda row: (row[0], row[1]))
+    return [row[2] for row in out]
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *args):
         pass
 
-    def reply(self, code, body, kind='application/json'):
+    def reply(self, code, body, kind='application/json', extra=None):
         data = body if isinstance(body, bytes) else (body if isinstance(body, str) else json.dumps(body)).encode()
         self.send_response(code)
         self.send_header('Content-Type', kind)
         self.send_header('Content-Length', str(len(data)))
         self.send_header('Cache-Control', 'no-store')
+        for key, value in (extra or {}).items():
+            self.send_header(key, value)
         self.end_headers()
         self.wfile.write(data)
 
@@ -340,9 +358,24 @@ class Handler(BaseHTTPRequestHandler):
         if len(parts) >= 2 and parts[-2] == 'push':  # Uptime Kuma's push URL shape, so a pusher only changes port and code
             ok = services.take_push(last, q)
             return self.reply(200 if ok else 404, {'ok': ok})
+        if len(parts) >= 2 and parts[-2] == 'logs' and last == 'download':
+            # The page's Logs section: one machine's log is a .log, several are a .zip holding one .log each.
+            try:
+                days = max(0, min(366, int(q.get('days', ['0'])[0])))  # 0 = everything kept
+            except ValueError:
+                days = 0
+            known = {machine for machine, _ in trail.saved()}  # only names the hub itself listed: no paths from the page
+            names = [name for name in ','.join(q.get('machines', [])).split(',') if name in known]
+            got = trail.download(names, days)
+            if not got:
+                return self.reply(400, {'error': 'pick at least one log'})
+            filename, data, kind = got
+            return self.reply(200, data, kind, {'Content-Disposition': f'attachment; filename="{filename}"'})
         if last == 'services':
             uptime, strips = services.summary()
             return self.reply(200, {'monitors': services.snapshot(), 'uptime': uptime, 'strips': strips})
+        if last == 'logs':
+            return self.reply(200, {'logs': log_rows()})
         if last in ('check', 'outages', 'history'):
             try:
                 days = max(1, min(366, int(q.get('days', ['1'])[0])))

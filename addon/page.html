@@ -66,6 +66,13 @@ svg { width:100%; height:140px; display:block; }
 .scroll { max-height:320px; overflow:auto; }
 .procs td:last-child { text-align:right; width:70px; }
 pre.log { margin:0; font:12px/1.45 ui-monospace, Consolas, monospace; white-space:pre-wrap; word-break:break-all; }
+.logs .row { cursor:default; }
+.logs .row input { margin:0 2px 0 0; flex:none; }
+.logs .row .u { width:auto; font-size:12px; }
+.logbar { display:flex; flex-wrap:wrap; align-items:center; gap:10px; margin-top:10px; padding-top:10px; border-top:1px solid var(--line); }
+.logbar select { font:inherit; padding:5px 8px; border:1px solid var(--line); border-radius:6px; background:var(--card); color:var(--text); }
+.logbar button { border:1px solid var(--c1); background:var(--c1); color:#fff; padding:6px 14px; border-radius:6px; cursor:pointer; }
+.logbar button:disabled { opacity:.5; cursor:default; }
 @media (max-width:420px) { .charts, .svc { grid-template-columns:1fr; } main { padding:12px; } }
 </style>
 </head>
@@ -80,6 +87,8 @@ pre.log { margin:0; font:12px/1.45 ui-monospace, Consolas, monospace; white-spac
   <div id="svc" class="svc"></div>
   <h2 class="sec">Outages, last 7 days</h2>
   <div class="panel" id="hout"></div>
+  <h2 class="sec">Logs <span class="when" style="font-weight:normal">(system logs the machines sent in, and Home watch's own)</span></h2>
+  <div class="panel" id="hlogs"><span class="empty">Loading...</span></div>
 </div>
 
 <div id="device" hidden>
@@ -135,7 +144,9 @@ const FACTS = [
   ['net_rx_mb', 'Network in, 5 min', ' MB'], ['net_tx_mb', 'Network out, 5 min', ' MB'], ['wifi_clients', 'Wi-Fi devices', ''],
 ];
 const TYPES = {ping: 'Answers pings', port: 'Port open', http: 'Web page answers', dns: 'Answers DNS', push: 'Reports in', machine: 'Device reports in'};
+const LOG_RANGES = [['1', 'Today'], ['3', 'Last 3 days'], ['7', 'Last 7 days'], ['14', 'Last 14 days'], ['0', 'All kept']];
 let days = 1, status = null, svc = null, outs = [], inside = false;
+let lg = {logs: []}, logPick = new Set(), logDays = '1';
 const $ = id => document.getElementById(id);
 const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const ago = s => s < 120 ? 'just now' : s < 7200 ? Math.round(s/60) + ' min ago' : s < 172800 ? Math.round(s/3600) + ' h ago' : Math.round(s/86400) + ' days ago';
@@ -176,8 +187,56 @@ function outageTable(list, showName) {
 }
 
 async function load() {
-  [status, svc, outs] = await Promise.all(['api/status', 'api/services', 'api/outages?days=365'].map(u => fetch(u).then(r => r.json())));
+  [status, svc, outs, lg] = await Promise.all(['api/status', 'api/services', 'api/outages?days=365', 'api/logs'].map(u => fetch(u).then(r => r.json())));
   show();
+}
+
+// The Logs section: tick All or some machines, pick how far back, download. The hub cuts by each line's own time and
+// sends one .log for one machine, or a .zip with one .log per machine for several.
+function logs() {
+  const list = lg.logs || [];
+  if (!list.length) { $('hlogs').innerHTML = '<span class="empty">No logs kept yet.</span>'; return; }
+  $('hlogs').innerHTML = '<div class="logs">' + list.map(l =>
+    '<label class="row"><input type="checkbox" data-log="' + esc(l.id) + '"' + (logPick.has(l.id) ? ' checked' : '') + '>' +
+    '<span class="n">' + esc(l.name) + '</span><span class="u">' + (l.last ? 'Last entry ' + when(l.last) : 'Nothing yet') + '</span></label>').join('') +
+    '<div class="logbar"><label class="row"><input type="checkbox" id="logall"> All</label>' +
+    '<select id="logdays" title="How far back the download goes">' + LOG_RANGES.map(([v, t]) =>
+      '<option value="' + v + '"' + (v === logDays ? ' selected' : '') + '>' + t + '</option>').join('') + '</select>' +
+    '<button id="loggo">Download</button></div></div>';
+  const boxes = [...$('hlogs').querySelectorAll('input[data-log]')], all = $('logall');
+  const syncAll = () => { all.checked = boxes.length > 0 && boxes.every(b => b.checked); };
+  boxes.forEach(b => b.onchange = () => {
+    if (b.checked) logPick.add(b.dataset.log); else logPick.delete(b.dataset.log);
+    syncAll();
+  });
+  all.onchange = () => boxes.forEach(b => {
+    b.checked = all.checked;
+    if (all.checked) logPick.add(b.dataset.log); else logPick.delete(b.dataset.log);
+  });
+  syncAll();
+  $('logdays').onchange = e => { logDays = e.target.value; };
+  $('loggo').onclick = downloadLogs;
+}
+
+async function downloadLogs() {
+  if (!logPick.size) { alert('Tick All, or at least one log, first.'); return; }
+  $('loggo').disabled = true;
+  try {
+    const url = 'api/logs/download?days=' + encodeURIComponent(logDays) + '&machines=' + encodeURIComponent([...logPick].join(','));
+    const r = await fetch(url);
+    if (!r.ok) throw new Error('the hub answered ' + r.status);
+    const named = /filename="([^"]+)"/.exec(r.headers.get('Content-Disposition') || '');
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(await r.blob());
+    a.download = named ? named[1] : 'home-watch-logs.zip';
+    document.body.append(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+  } catch (e) {
+    alert('Could not download the logs: ' + e.message);
+  }
+  $('loggo').disabled = false;
 }
 
 function show() {
@@ -208,6 +267,7 @@ function home() {
   svc.monitors.forEach(m => (groups[m.group || 'Other'] = groups[m.group || 'Other'] || []).push(m));
   $('svc').innerHTML = Object.entries(groups).map(([g, ms]) => '<section><h3>' + esc(g) + '</h3>' + ms.map(m => serviceRow(m, true)).join('') + '</section>').join('');
   $('hout').innerHTML = outageTable(outs.filter(o => o.start > status.now - 7 * 86400), true);
+  logs();
 }
 
 function device(id) {

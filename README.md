@@ -12,6 +12,8 @@ Assistant, and sends an alert through a webhook. It needs no cloud account and n
   it has been up, and the busiest programs on Linux machines.
 - A page for each machine and each check, with graphs for a day, a week, a month or a year, % up and its outages.
 - Every check's last 24 hours as a strip, an hour per tick.
+- A Logs section that downloads the system logs the machines sent in, and Home Watch's own: tick All or some machines,
+  pick today, 3, 7, 14 days or everything kept, and get one `.log` back, or a `.zip` with one file per machine.
 - Alerts at most once a day per problem; a problem that clears can alert again if it comes back.
 - A machine that stops reporting (6 hours by default) is a problem too.
 - The add-on reports on itself: space, how much its card writes, and the kernel's SD card errors since boot.

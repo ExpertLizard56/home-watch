@@ -21,7 +21,8 @@ That base image is published for aarch64, amd64 and armv7, which is why `config.
   It reports itself as machine `pi`, kind `pi`.
 - `services.py` — the service checks from `monitors.json`: the checks themselves, their status and retry rules, the
   event and per-check CSVs, uptime/strips/outages, the push codes and self-heal.
-- `trail.py` — the busiest programs every Linux report carries, and the syslog lines machines send in.
+- `trail.py` — the busiest programs every Linux report carries, the syslog lines machines send in, and the range the
+  page's Logs section downloads (a `.log` for one machine, a `.zip` of one each for several).
 - `page.html` — the page: one file, plain SVG, no libraries. Three views (everything, one machine, one check), routed
   by the URL fragment (`#<machine>`, `#check:<name>`).
 - `config.yaml` — the add-on's metadata and its few options (see version bumps). `settings.example.json` and
@@ -137,14 +138,22 @@ log it sends to UDP 5514. Log lines are kept per sender in `logs/`, `log_senders
 (an unknown sender is filed under its own address); crond's per-job lines and access points' Wi-Fi steering chatter are
 dropped, as they are pure noise and cost megabytes.
 
+The page's Logs section lists every machine with files in `logs/` plus the hub's own `log.txt` (id `log.txt`, which no
+machine id can be, since `machine_id` drops the dot), and downloads a range of them. A range counts calendar days back
+from local midnight and is cut by each line's own timestamp (`trail.since`, `trail.lines`), never to a line count; lines
+with no date keep the date of the line above them. One machine comes back as a `.log`, several as a `.zip` with one
+`.log` each, built in memory with the standard library's `zipfile`.
+
 ### The page and its API
 
 `GET /` serves `page.html`; every other GET is one of `/api/status` (state, order, labels), `/api/services` (each
 check, its uptime and its 24-hour strip), `/api/history?machine=&days=`, `/api/check?name=&days=`,
-`/api/outages?days=`, `/api/log?machine=` and `/api/push/<code>`. Days are clamped to 1-366 and the graphs are averaged
-into about 300 points so a year draws as fast as a day. Both doors — the reports and the page — refuse any address that
-does not start with one of `allowed_networks`. The page also answers on Home Assistant's ingress, so it can sit in the
-sidebar.
+`/api/outages?days=`, `/api/log?machine=`, `/api/logs` (the machines with saved syslog files, plus the hub's own log)
+and `/api/logs/download?machines=&days=`, which answers as an attachment: a `.log`, or a `.zip` for several, with
+`days` 0 meaning everything kept. Only the names `/api/logs` itself listed are accepted, so no path comes from the page.
+Days are clamped to 1-366 (log ranges to 0-366) and the graphs are averaged into about 300 points so a year draws as
+fast as a day. Both doors — the reports and the page — refuse any address that does not start with one of
+`allowed_networks`. The page also answers on Home Assistant's ingress, so it can sit in the sidebar.
 
 ## The checks
 
@@ -191,10 +200,11 @@ logged and skipped; the rest of the add-on must still work. A reporter can also 
 - `lefthook.yml` runs on every commit: gitleaks (refuses a commit whose new lines hold a password, token or key — this
   repo is public) and ruff on the staged Python. A fresh checkout needs `lefthook install` once. A refused commit means
   fix what it printed; never skip it (`--no-verify`, `LEFTHOOK=0`).
-- There is no unit test suite. The cheapest proof of a change is ruff plus the local run above: start it on an empty
-  data folder, post a report, fetch `/api/status`, `/api/services` and one graph. `python -m py_compile addon/*.py`
-  catches a file that will not even import, and if `page.html`'s script changed, `node --check` the script on its own
-  (it is one `<script>` block, and the page has no build step).
+- `cd addon && python -m unittest test_logs` — the one test file, for the Logs section's range cut and its `.log` /
+  `.zip`. It uses a temporary data folder, so it needs nothing else. Otherwise the cheapest proof of a change is ruff
+  plus the local run above: start it on an empty data folder, post a report, fetch `/api/status`, `/api/services` and
+  one graph. `python -m py_compile addon/*.py` catches a file that will not even import, and if `page.html`'s script
+  changed, `node --check` the script on its own (it is one `<script>` block, and the page has no build step).
 
 ## Version bumps
 

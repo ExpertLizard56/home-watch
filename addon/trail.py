@@ -5,15 +5,20 @@ stuck busy for days and then hang, and the restart that fixes it takes the log t
   programs at 1% or more go in /share/home-watch/programs/<machine> <year-month>.csv (time, program, %).
 - Logs: machines can send their system log here (UDP 5514, OpenWrt's log_ip). Lines go in
   /share/home-watch/logs/<machine> <year-month>.log; cron's line for every job it starts and access points' Wi-Fi
-  steering chatter are left out.
+  steering chatter are left out. The page's Logs section downloads them again - one .log for one machine, a .zip with
+  one .log per machine for several - cut only by each line's own time, never to a line count.
 Programs kept 12 months, logs 3.
 """
 
 import csv
 import glob
+import io
 import os
+import re
 import socket
-from datetime import datetime
+import time
+import zipfile
+from datetime import datetime, timedelta
 
 from history import DATA
 
@@ -23,6 +28,11 @@ LOG_PORT = 5514
 KEEP = {PROGRAMS: 12, LOGS: 3}
 NOISE = ('cmd /usr/bin/', 'cmd /usr/local/bin/',  # crond's "USER root pid N cmd ..." for every job, every minute
          'BEACON-REQ-TX-STATUS', 'BEACON-RESP-RX', 'Unexpected Link measurement report')  # access points' chatter, ~1 MB a day
+# The hub's own log (watch.py's LOG_FILE) is offered next to the machines'. Its id has a dot, which machine_id() never
+# leaves in a machine name, so it cannot clash with a real one.
+OWN_ID = 'log.txt'
+OWN_NAME = 'Home Watch'
+OWN_LOG = f'{DATA}/log.txt'
 
 
 def clean_procs(raw):
@@ -83,6 +93,145 @@ def tail(machine, lines=200):
         with open(path, encoding='utf-8', errors='replace') as f:
             out.extend(f.readlines())
     return [line.rstrip('\n') for line in out[-lines:]]
+
+
+# ---- the page's Logs section: what is saved, and downloading a range of it ---------------------------------------
+
+def _paths(machine):
+    """A machine's month files, oldest first."""
+    return sorted(glob.glob(f"{LOGS}/{glob.escape(machine)} *.log"))
+
+
+def stamp(line):
+    """The time a line of a log was written, from the date at its start (None when it has none).
+
+    Machines' lines start "YYYY-MM-DD HH:MM:SS" (trail.listen) and the hub's own "YYYY-MM-DD HH:MM" (watch.note)."""
+    for fmt, size in (('%Y-%m-%d %H:%M:%S', 19), ('%Y-%m-%d %H:%M', 16)):
+        try:
+            return datetime.strptime(str(line)[:size], fmt)
+        except ValueError:
+            continue
+    return None
+
+
+def since(days, now=None):
+    """Local midnight `days` calendar days back: 1 is today, 3 is today and the two days before it; 0 is everything."""
+    days = int(days or 0)
+    if days <= 0:
+        return None
+    midnight = datetime.fromtimestamp(time.time() if now is None else now).replace(hour=0, minute=0, second=0, microsecond=0)
+    return midnight - timedelta(days=days - 1)
+
+
+def _newest(path, size=32768):
+    """The time of the last stamped line in a file, read from its end so a big log costs little."""
+    try:
+        with open(path, 'rb') as f:
+            f.seek(0, os.SEEK_END)
+            start = max(0, f.tell() - size)
+            f.seek(start)
+            got = f.read().decode('utf-8', 'replace')
+    except OSError:
+        return None
+    lines = got.splitlines()
+    if start and lines:
+        lines = lines[1:]  # the first is half a line
+    for line in reversed(lines):
+        when = stamp(line)
+        if when:
+            return when
+    return None
+
+
+def saved():
+    """[(machine or OWN_ID, the newest entry's time or None)], machines alphabetically, the hub's own log last."""
+    by_machine = {}
+    for path in sorted(glob.glob(f'{LOGS}/* *.log')):  # sorted: the last path for a machine is its newest month
+        by_machine[os.path.basename(path).rsplit(' ', 1)[0]] = path
+    out = [(machine, _newest(path)) for machine, path in sorted(by_machine.items())]
+    out.append((OWN_ID, _newest(OWN_LOG)))
+    return out
+
+
+def last_entry(machine):
+    """When the newest entry in a machine's log (or the hub's own) was written, or None."""
+    if machine == OWN_ID:
+        return _newest(OWN_LOG)
+    paths = _paths(machine)
+    return _newest(paths[-1]) if paths else None
+
+
+def _month(path):
+    """The month a logs/ file holds, from its "<machine> <year-month>.log" name; None if it cannot be told."""
+    try:
+        return datetime.strptime(os.path.basename(path).rsplit(' ', 1)[-1][:7], '%Y-%m')
+    except ValueError:
+        return None
+
+
+def _read(path, after):
+    """A file's lines from `after` on, by each line's own time; a line without a date keeps the one before it."""
+    out, seen = [], None
+    try:
+        with open(path, encoding='utf-8', errors='replace') as f:
+            for raw in f:
+                line = raw.rstrip('\r\n')
+                when = stamp(line)
+                if when:
+                    seen = when
+                if after and (seen is None or seen < after):
+                    continue
+                out.append(line)
+    except OSError:
+        return out
+    return out
+
+
+def lines(machine, days=0):
+    """A machine's log lines for the range, oldest first. `days` counts calendar days back from local midnight
+    (1 = today, 0 = all kept). Whole lines go, never a cut to some count; a file whose month is before the range is
+    skipped unread."""
+    after = since(days)
+    if machine == OWN_ID:
+        return _read(OWN_LOG, after)
+    paths = _paths(machine)
+    if after:
+        first = after.replace(day=1)
+        paths = [p for p in paths if (_month(p) or first) >= first]
+    out = []
+    for path in paths:
+        out.extend(_read(path, after))
+    return out
+
+
+def _file_stem(name):
+    """A name fit for a file: the hub's own log is home-watch, a machine's id is already safe."""
+    return 'home-watch' if name == OWN_ID else (re.sub(r'[^A-Za-z0-9._-]', '-', name) or 'log')
+
+
+def download(names, days=0, now=None):
+    """(filename, bytes, content type) of the chosen logs for the range; None when none of the names has a log.
+
+    One log is a plain .log; several are a .zip holding one .log each. Built in memory: a range is a few months at most."""
+    picked, seen = [], set()
+    for name in names:
+        name = str(name or '').strip()
+        if not name or name in seen or not (name == OWN_ID or _paths(name)):
+            continue
+        seen.add(name)
+        picked.append((name, lines(name, days)))
+    if not picked:
+        return None
+    day = datetime.fromtimestamp(time.time() if now is None else now).strftime('%Y-%m-%d')
+    if len(picked) == 1:
+        name, body = picked[0]
+        text = '\n'.join(body) + ('\n' if body else '')
+        return f'{_file_stem(name)}-{day}.log', text.encode(), 'text/plain; charset=utf-8'
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as archive:
+        for name, body in picked:
+            archive.writestr(f'{_file_stem(name)}.log', '\n'.join(body) + ('\n' if body else ''))
+    return f'home-watch-logs-{day}.zip', buf.getvalue(), 'application/zip'
 
 
 def tidy(note):
