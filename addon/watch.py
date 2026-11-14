@@ -1,8 +1,8 @@
 """Home watch: the Home Assistant add-on that keeps an eye on every machine on the home network.
 
 Each device posts a report to port 8790 (/report) every 5 minutes; the machine the add-on runs on reports on itself.
-Home watch keeps the history, runs the checks, tells your phone through Home Assistant's alert webhook (at most once
-a day per problem) and serves the page (the Home Assistant sidebar, or the add-on's port).
+Home watch keeps the history, runs the checks, leaves every notice in Home Assistant's notifications and sends it to the
+phones (at most once a day per problem), and serves the page (the Home Assistant sidebar, or the add-on's port).
 
 The parts: watch.py (this: reports, checks, alerts, the web door), history.py (the CSV history), pi.py (the hub's own
 report), services.py (the service checks), trail.py (each machine's busiest programs and the logs machines send),
@@ -31,7 +31,7 @@ import time
 import urllib.request
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import parse_qs, urlencode, urlparse
+from urllib.parse import parse_qs, urlparse
 
 import history
 import pi
@@ -42,6 +42,12 @@ DATA = history.DATA
 STATE_FILE = f'{DATA}/state.json'
 LOG_FILE = f'{DATA}/log.txt'
 SETTINGS_FILE = f'{DATA}/settings.json'
+# Home Assistant's API, through the Supervisor: every notice is left in its notifications and then sent to the notify
+# services (needs homeassistant_api: true in config.yaml).
+SUPERVISOR = 'http://supervisor'
+# The shared rule of the three Pi add-ons: an ISO time with a zone in this file silences the phones until then.
+QUIET_FILE = '/share/phone-quiet-until.txt'
+
 OPTIONS_FILE = os.environ.get('HOME_WATCH_OPTIONS', '/data/options.json')
 PAGE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'page.html')
 PORT = int(os.environ.get('HOME_WATCH_PORT', '8790'))
@@ -464,18 +470,82 @@ def current_problems():
     return out
 
 
-def send(title, message):
-    hook = options.get('alert_webhook')
-    if not hook:
-        note(f"no alert_webhook set: {title} - {message}")
-        return False
-    body = urlencode({'title': title, 'message': message}).encode()
+# ---- notices -------------------------------------------------------------------------------------------------------
+
+def supervisor_call(path, payload=None):
+    """Call Home Assistant's API through the Supervisor, with the token it gives this add-on (homeassistant_api).
+
+    A payload makes it a JSON POST; no payload is a GET."""
+    body = json.dumps(payload).encode() if payload is not None else None
+    req = urllib.request.Request(f'{SUPERVISOR}{path}', data=body, method='POST' if body else 'GET', headers={
+        'Authorization': f"Bearer {os.environ.get('SUPERVISOR_TOKEN', '')}", 'Content-Type': 'application/json'})
+    with urllib.request.urlopen(req, timeout=20) as r:
+        return json.loads(r.read().decode('utf-8', 'replace') or 'null')
+
+
+def quiet_until():
+    """The time in QUIET_FILE while it is still in the future, else None (the phones are not quiet).
+
+    The shared rule of the three Pi add-ons: an ISO time with a zone (2026-11-16T12:00:00-05:00) silences the phones
+    until then. A missing file, text that is not a time, or a time with no zone all mean not quiet, because without a
+    zone it cannot be compared with now safely."""
     try:
-        urllib.request.urlopen(urllib.request.Request(hook, data=body, method='POST'), timeout=20).read()
-        return True
+        with open(QUIET_FILE, encoding='utf-8') as f:
+            until = datetime.fromisoformat(f.read().strip())
+    except (OSError, ValueError):
+        return None
+    if until.tzinfo is None:
+        return None
+    return until if until > datetime.now().astimezone() else None
+
+
+def phone_names():
+    """The notify services a notice goes to: the `phones` option's names, or every mobile_app_ service when it is blank.
+
+    A blank option asks Home Assistant for its notify services and takes the ones the companion app makes, which all
+    start mobile_app_."""
+    listed = [name.strip().removeprefix('notify.') for name in str(options.get('phones') or '').split(',')]
+    names = [name for name in listed if name]
+    if names:
+        return names
+    for domain in supervisor_call('/core/api/services') or []:
+        if isinstance(domain, dict) and domain.get('domain') == 'notify':
+            return [name for name in (domain.get('services') or {}) if name.startswith('mobile_app_')]
+    return []
+
+
+def send(title, message):
+    """One notice: into Home Assistant's notifications, then to the phones unless the house is quiet.
+
+    The shared phone-notice rule of the three Pi add-ons (Media Hub, Home watch, Home upkeep): every notice is also
+    left in Home Assistant's notifications, the durable record; then it goes to the phones, the `phones` option's notify
+    services or, when that is blank, every mobile_app_ service; while QUIET_FILE holds a future time step 2 is skipped
+    and that is logged; and a failure is logged, never raised. The persistent notification is what says the notice got
+    through: a phone that cannot be reached does not make the add-on send the same alert again."""
+    posted = False
+    try:
+        supervisor_call('/core/api/services/persistent_notification/create', {'title': title, 'message': message})
+        posted = True
     except Exception as e:
-        note(f"could not send: {title} - {message} ({e})")
-        return False
+        note(f"could not leave a notification: {title} - {message} ({e})")
+    until = quiet_until()
+    if until:
+        note(f"phones quiet until {until.isoformat()}: {title} - {message}")
+        return posted
+    try:
+        names = phone_names()
+    except Exception as e:
+        note(f"could not list the phones: {title} - {message} ({e})")
+        return posted
+    if not names:
+        note(f"no phone to notify: {title} - {message}")
+        return posted
+    for name in names:
+        try:
+            supervisor_call(f'/core/api/services/notify/{name}', {'title': title, 'message': message, 'data': {}})
+        except Exception as e:
+            note(f"could not notify {name}: {title} - {message} ({e})")
+    return posted
 
 
 def check():

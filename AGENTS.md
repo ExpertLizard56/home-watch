@@ -2,8 +2,9 @@
 
 Home Watch is a Home Assistant add-on that watches the machines on a home network and tells a phone when something is
 wrong. Each machine runs a small reporter every 5 minutes and posts raw counters; the add-on works out the amounts,
-keeps the history, runs the checks, sends an alert through a webhook, and serves a page in Home Assistant. No cloud
-account and nothing extra to install. Its files are plain files in `/share/home-watch`, and it is MIT licensed.
+keeps the history, runs the checks, leaves each notice in Home Assistant and sends it to the phones, and serves a page
+in Home Assistant. No cloud account and nothing extra to install. Its files are plain files in `/share/home-watch`, and
+it is MIT licensed.
 
 `README.md` is for whoever installs it. This file is for whoever changes it.
 
@@ -167,15 +168,22 @@ anything about the right one. A check's own page shows its push path to copy; th
 The Checks screen shows the same path (with a one-line curl example) after saving a push check, and its button makes a
 new code, which stops the old path working.
 
-### Alerts and self-heal
+### Notices and self-heal
 
-Alerts go to the add-on's `alert_webhook` option, a form post with `title` and `message` (any Home Assistant webhook
-that forwards to a phone works). At most once a day per problem; a problem that clears is forgotten, so it alerts again
-if it comes back. With no webhook set, every alert is only written to the log. `silent_hours` (6 by default) is how long
-a machine may go without a report before that is a problem too — shown for a week, then only on the page.
+`send(title, message)` follows the phone-notice rule shared by the three Pi add-ons (Media Hub, Home watch, Home
+upkeep). (1) Every notice is left in Home Assistant's notifications: `POST
+/core/api/services/persistent_notification/create` through the Supervisor, which is why `config.yaml` has
+`homeassistant_api: true`. (2) It then goes to the phones: the `phones` option's notify services, comma-separated, or,
+when that is blank, every `notify` service whose name starts `mobile_app_` (read from `GET /core/api/services`); one
+`POST /core/api/services/notify/<name>` per phone, with `title`, `message` and empty `data`. (3) While
+`/share/phone-quiet-until.txt` holds an ISO time with a zone still in the future, step 2 is skipped and that is logged
+(step 1 still happens); a missing file, bad text or a time without a zone all mean not quiet. (4) A failure is logged,
+never raised. At most once a day per problem; a problem that clears is forgotten, so it alerts again if it comes back.
+`silent_hours` (6 by default) is how long a machine may go without a report before that is a problem too — shown for a
+week, then only on the page.
 
-Self-heal is off unless the `self_heal` option is on and `self_heal_webhook` is set; it is a separate webhook from the
-alerts. On a check that goes down (or comes back up) it posts Uptime Kuma's message shape —
+Self-heal is off unless the `self_heal` option is on and `self_heal_webhook` is set; it is separate from the phone
+notices. On a check that goes down (or comes back up) it posts Uptime Kuma's message shape —
 `{"heartbeat": {"status", "msg", "time"}, "monitor": {"name", "type", "script"}, "msg"}` — where `monitor.script` is
 `settings.json`'s `heal_script` with the check's `app` filled in (its name made into a slug when it has no `app`), so the
 automation behind the webhook can start that script. With the option off, the add-on logs what it would have done.
@@ -262,7 +270,10 @@ logged and skipped; the rest of the add-on must still work. A reporter can also 
 - `lefthook.yml` runs on every commit: gitleaks (refuses a commit whose new lines hold a password, token or key — this
   repo is public) and ruff on the staged Python. A fresh checkout needs `lefthook install` once. A refused commit means
   fix what it printed; never skip it (`--no-verify`, `LEFTHOOK=0`).
-- `cd addon && python -m unittest test_logs test_machines test_services test_health` — four test files: `test_logs` for
+- `cd addon && python -m unittest test_alerts test_logs test_machines test_services test_health` — five test files:
+  `test_alerts` for the phone notices (the quiet file: a future time with a zone is quiet, while a past time, a
+  missing file, bad text and a time without a zone are not; a blank `phones` meaning every `mobile_app_` service;
+  the persistent notification still posted while quiet; and a failure logged rather than raised); `test_logs` for
   the Logs section's range cut and its `.log` / `.zip`; `test_machines` for the Machines screen's validation, save (the
   name, the limits, every other key kept, a blank limit meaning the default), move and forget (its settings entry,
   history, programs, logs and state dropped), a broken settings file left alone, and the same ingress-only rule;
@@ -272,7 +283,7 @@ logged and skipped; the rest of the add-on must still work. A reporter can also 
   the dropped history), for the self-heal `app` that survives a rename, and for the API's ingress-only rule (the same
   list served read-only over the LAN, a change refused without `X-Remote-User-Id`); `test_health` for the watchdog
   door: 200 `ok` while the check loop is going round, 503 with a short reason when it has stopped, the loop marking
-  each round it begins, and the door still answering when `allowed_networks` is narrowed. All four use a temporary data
+  each round it begins, and the door still answering when `allowed_networks` is narrowed. All five use a temporary data
   folder, so they need nothing else. Otherwise the cheapest proof of a change is ruff plus the local run above: start
   it on an empty data folder, post a report, fetch `/api/status`, `/api/services` and one graph.
   `python -m py_compile addon/*.py` catches a file
@@ -297,7 +308,8 @@ ideas only, no code. The detail is at the top of each module.
 - `python -m ruff check .` before committing. Commit with explicit paths.
 - End every commit message with a line naming the AI and its model, so a later reader can tell who changed what, e.g.
   `Co-Authored-By: Cline (Claude Sonnet) <noreply@cline.bot>` (Claude adds its own).
-- Nothing secret goes in git, and this repo is public: webhook addresses (`alert_webhook`, `self_heal_webhook` are
-  add-on options, not files), push codes (they live in `push-codes.json` in the data folder), and any real address,
+- Nothing secret goes in git, and this repo is public: webhook addresses (`self_heal_webhook` is an add-on option, not a
+  file), your own notify service names (the `phones` option, also not a file), push codes (they live in
+  `push-codes.json` in the data folder), and any real address,
   hostname or machine name. The example files — `addon/monitors.json`, `addon/settings.example.json`, the README's
   blocks — stay generic: made-up machine names, a private LAN range, `example.com`.

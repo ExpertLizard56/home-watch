@@ -1,5 +1,5 @@
 name: Home watch
-version: "0.13.1"
+version: "0.14.0"
 slug: home_watch
 description: Keeps an eye on every machine at home (health, history, drive and SD card trouble) and tells your phone through Home Assistant when something's wrong.
 url: https://github.com/ExpertLizard56/home-watch
@@ -20,21 +20,24 @@ ingress_port: 8790
 watchdog: http://[HOST]:8790/health
 panel_icon: mdi:shield-check
 panel_title: Home watch
-# History, state, log, the check list and settings.json are plain files in /share/home-watch.
+# History, state, log, the check list and settings.json are plain files in /share/home-watch; the phones' quiet file is
+# the shared /share/phone-quiet-until.txt.
 map:
   - share:rw
 # Reads the kernel log (SD card errors) through the Supervisor.
 hassio_api: true
 hassio_role: manager
+# Leaves every notice in Home Assistant's notifications and sends it to the phones through its notify services.
+homeassistant_api: true
 # Your own names and numbers (machine labels and order, limits, log senders, who may report, the self-heal script
 # name) are not options: they are /share/home-watch/settings.json, read at start (see settings.example.json).
 options:
-  alert_webhook: ""
+  phones: ""
   silent_hours: 6
   self_heal: false
   self_heal_webhook: ""
 schema:
-  alert_webhook: str
+  phones: str
   silent_hours: int(1,168)
   self_heal: bool
   self_heal_webhook: str

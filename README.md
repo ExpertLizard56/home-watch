@@ -4,7 +4,8 @@ A Home Assistant add-on that watches every machine on your home network and tell
 
 Each machine runs a small reporter every 5 minutes. Home Watch keeps a history of what they send, runs the checks (hot,
 low on space, memory full for an hour, a drive or SD card in trouble, a service not answering), shows a page in Home
-Assistant, and sends an alert through a webhook. It needs no cloud account and nothing extra installed.
+Assistant, and leaves every notice in Home Assistant's notifications and sends it to your phone. It needs no cloud
+account and nothing extra installed.
 
 ## What you get
 
@@ -14,7 +15,7 @@ Assistant, and sends an alert through a webhook. It needs no cloud account and n
 - Every check's last 24 hours as a strip, an hour per tick.
 - A Logs section that downloads the system logs the machines sent in, and Home Watch's own: tick All or some machines,
   pick today, 3, 7, 14 days or everything kept, and get one `.log` back, or a `.zip` with one file per machine.
-- Alerts at most once a day per problem; a problem that clears can alert again if it comes back.
+- A notice at most once a day per problem; a problem that clears can alert again if it comes back.
 - A machine that stops reporting (6 hours by default) is a problem too.
 - The add-on reports on itself: space, how much its card writes, and the kernel's SD card errors since boot.
 - A **Checks** screen to add, change, reorder and remove service checks without a restart: ping, TCP port, HTTP, DNS, a
@@ -42,27 +43,25 @@ Home Assistant builds it on the machine it runs on. It fits `aarch64` (64-bit Ra
 
 ## First run
 
-**Alerts.** In the add-on's Configuration tab, set `alert_webhook` to a Home Assistant webhook URL, for example
-`http://homeassistant.local:8123/api/webhook/home_watch_alert`. Home Watch posts a form with `title` and `message`.
-An automation that sends it to your phone:
+**Phone notices.** Every notice is left in Home Assistant's notifications (the bell in the sidebar) and then sent to
+the phones. Leave the `phones` option empty and every notify service whose name starts with `mobile_app_` gets it — that
+is every phone signed in to the Home Assistant app. To pick your own, list the notify services, comma-separated:
 
 ```yaml
-automation:
-  - alias: Home watch alerts
-    triggers:
-      - trigger: webhook
-        webhook_id: home_watch_alert
-        allowed_methods:
-          - POST
-    actions:
-      - action: notify.mobile_app_my_phone
-        data:
-          title: "{{ trigger.data.title }}"
-          message: "{{ trigger.data.message }}"
+phones: mobile_app_my_phone, mobile_app_my_tablet
 ```
 
-Leave it empty and alerts are only written to the add-on's log. `silent_hours` (6 by default) is how long a machine may
-stay quiet before that counts as a problem.
+To silence the phones for a while, write the time to start again in `/share/phone-quiet-until.txt`, as an ISO time with
+a zone:
+
+```
+2026-11-16T12:00:00-05:00
+```
+
+Until then notices still appear in Home Assistant but no phone gets them. Delete the file to end the quiet early; a
+missing file, text that is not a time, or a time with no zone all mean not quiet.
+
+`silent_hours` (6 by default) is how long a machine may stay quiet before that counts as a problem.
 
 **`/share/home-watch/settings.json`** is where your own names and numbers go. The page's **Machines** screen (below)
 writes it for you; every key is optional, so a missing file is normal, and editing it by hand and restarting still works.
@@ -226,8 +225,8 @@ carries the code, not the name, so renaming the check does not change it, and th
   notices SD and eMMC card errors on the machine it runs on, which is the trouble a worn-out card shows first.
 - Host networking, so the other machines can reach port 8790. Only the private address ranges may post reports or open
   the page by default (`allowed_networks` in `settings.json`).
-- No internet access of its own. It only makes the connections your checks ask for, and posts your alerts to your own
-  webhook.
+- No internet access of its own. It only makes the connections your checks ask for, and leaves its notices in Home
+  Assistant.
 
 ## Credit
 
