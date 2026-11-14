@@ -206,6 +206,30 @@ class Machines(Helpers):
         self.assertFalse(watch.forget_machine('pc', self.note))
 
 
+class Notes(Helpers):
+    """A report's short information lines: kept with the machine for its page, and information only."""
+
+    def test_a_report_keeps_its_notes_and_a_later_one_without_them_clears_them(self):
+        watch.take_report({'machine': 'pc', 'notes': {'Backup': 'last run 2 hours ago'}})
+        self.assertEqual(watch.machine_report('pc')['notes'], {'Backup': 'last run 2 hours ago'})
+        watch.take_report({'machine': 'pc', 'notes': {'Backup': 'running now'}})
+        self.assertEqual(watch.machine_report('pc')['notes'], {'Backup': 'running now'})   # replaced, not merged
+        watch.take_report({'machine': 'pc'})
+        self.assertNotIn('notes', watch.machine_report('pc'))
+
+    def test_notes_are_cut_to_their_limits_and_non_strings_dropped(self):
+        got = watch.clean_notes({'L' * 60: 'x' * 400, 'count': 3, 'flag': True, 7: 'seven', 'ok': 'Fine'})
+        self.assertEqual(got, {'L' * 40: 'x' * 300, 'ok': 'Fine'})
+        self.assertEqual(watch.clean_notes([('label', 'text')]), {})        # not an object: nothing to keep
+        self.assertEqual(len(watch.clean_notes({f'n{n}': 'v' for n in range(20)})), 12)
+
+    def test_notes_never_become_a_problem_or_an_alert(self):
+        watch.take_report({'machine': 'pc', 'metrics': {'temp': 40, 'mem': 10},
+                           'notes': {'hot': 'Warm in here', 'space': 'Room to spare'}})
+        self.assertEqual(watch.machine_report('pc')['notes'], {'hot': 'Warm in here', 'space': 'Room to spare'})
+        self.assertEqual(watch.current_problems(), {})
+
+
 class Api(Helpers):
     """The Machines screen's doors: anyone allowed may look, but only Home Assistant's ingress (a signed-in panel
     request, which the Supervisor marks with X-Remote-User-Id) may change anything."""

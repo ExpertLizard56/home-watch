@@ -41,7 +41,8 @@ That base image is published for aarch64, amd64 and armv7, which is why `config.
 A reporter posts JSON to `POST /report` on port 8790 (host networking), every 5 minutes:
 
 ```
-{machine, name, kind, metrics:{...}, counters:{...}, cpu_ticks:[total, idle], procs:[[name, %], ...], problems:{key: msg}}
+{machine, name, kind, metrics:{...}, counters:{...}, cpu_ticks:[total, idle], procs:[[name, %], ...], problems:{key: msg},
+ notes:{label: text}}
 ```
 
 Reporters send **raw counters** (bytes read and written, bytes received and sent, CPU ticks since boot). The hub works
@@ -49,6 +50,10 @@ out the amounts from the change between two reports — Beszel's idea — so a r
 and a counter that went backwards (a reboot) is simply skipped. A report more than 15 minutes after the last one gets
 no amounts either, for the same reason. `problems` is how a reporter raises something the hub could not see from the
 numbers (a drive reporting bad health, a drive refusing writes, disk errors in a log).
+
+`notes` is `{label: text}`, short information lines a reporter wants shown on its page: at most 12, a label cut to 40
+characters and a text to 300, and anything that is not a string dropped. Each report replaces them, and a report
+without them clears them. They are information only — never a problem and never an alert (`watch.clean_notes`).
 
 The metrics land in the history columns `history.COLUMNS`; a machine with none of them leaves blanks.
 

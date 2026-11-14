@@ -125,6 +125,8 @@ pre.log { margin:0; font:12px/1.45 ui-monospace, Consolas, monospace; white-spac
   <div id="dproblems" class="problems none"></div>
   <div class="when" id="dwhen" style="margin:-8px 0 12px"></div>
   <div id="facts" class="facts panel"></div>
+  <div id="dnoteswrap" hidden><h2 class="sec">From the device</h2>
+    <div class="panel" id="dnotes"></div></div>
   <div id="dsvcwrap"><h2 class="sec">Checks on this device</h2><div class="panel" id="dsvc"></div>
     <h2 class="sec">Outages, last 30 days</h2><div class="panel" id="dout"></div></div>
   <div id="dprocwrap"><h2 class="sec">Programs <span class="when" style="font-weight:normal">(share of the CPU over the last 5 minutes)</span></h2>
@@ -223,15 +225,18 @@ pre.log { margin:0; font:12px/1.45 ui-monospace, Consolas, monospace; white-spac
   "counters": {"disk_read_bytes": 1000000, "disk_write_bytes": 2000000,
                "net_rx_bytes": 3000000, "net_tx_bytes": 4000000},
   "cpu_ticks": [1000, 500],
-  "problems": {}
+  "problems": {},
+  "notes": {"Backup": "last run 2 hours ago"}
 }</pre>
     <p><code>machine</code> is the id a check watches (lowercase letters, digits, hyphens); <code>name</code> and
       <code>kind</code> are labels. <code>metrics</code> holds the numbers shown on the page. <code>counters</code> are
       raw totals since boot: Home Watch works out the amounts from one report to the next. <code>cpu_ticks</code> is
       <code>[total, idle]</code>. Put anything only the machine can see in <code>problems</code> (a drive health warning,
-      for example) and it shows as a problem on the page.</p>
+      for example) and it shows as a problem on the page. <code>notes</code> is <code>{label: text}</code> for short
+      lines the machine wants shown (a backup's last run, say): information only, at most 12, never a problem or an
+      alert. Each report replaces them, and a report without them clears them.</p>
     <pre>curl -X POST http://homeassistant.local:8790/report -H "Content-Type: application/json" \
-  -d '{"machine":"example","name":"Example machine","kind":"linux","metrics":{"cpu":12.5,"mem":40},"counters":{},"cpu_ticks":[1000,500],"problems":{}}'</pre>
+  -d '{"machine":"example","name":"Example machine","kind":"linux","metrics":{"cpu":12.5,"mem":40},"counters":{},"cpu_ticks":[1000,500],"problems":{},"notes":{}}'</pre>
   </details>
 </div>
 <div id="machines" hidden>
@@ -875,6 +880,9 @@ function device(id) {
   $('dproblems').innerHTML = lines.length ? lines.join('') : 'Nothing wrong here.';
   $('dwhen').textContent = 'Last report ' + ago(status.now - m.last) + ', up ' + upFor(x.uptime_h);
   $('facts').innerHTML = FACTS.filter(([k]) => x[k] != null).map(([k, label, u]) => '<div>' + esc(label) + '<b>' + fmt(x[k], u) + '</b></div>').join('');
+  const notes = Object.entries(m.notes || {});
+  $('dnoteswrap').hidden = !notes.length;
+  $('dnotes').innerHTML = notes.map(([label, text]) => '<div><b>' + esc(label) + ':</b> ' + esc(text) + '</div>').join('');
   $('dsvcwrap').hidden = !mine.length;
   $('dsvc').innerHTML = mine.map(s => serviceRow(s, false)).join('');
   $('dout').innerHTML = outageTable(outs.filter(o => ids.has(o.id) && o.start > status.now - 30 * 86400), true);

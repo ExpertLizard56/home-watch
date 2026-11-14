@@ -384,8 +384,24 @@ def forget_machine(mid, note=None):
 
 # ---- reports ----------------------------------------------------------------------------------------------------
 
+def clean_notes(raw):
+    """{label: text} from a report -> the same, checked: at most 12, labels cut to 40 characters and texts to 300, and
+    anything that is not a string left out. Notes are information for the page only: they never become a problem."""
+    out = {}
+    if not isinstance(raw, dict):
+        return out
+    for label, text in raw.items():
+        if not isinstance(label, str) or not isinstance(text, str):
+            continue
+        out[label[:40]] = text[:300]
+        if len(out) >= 12:
+            break
+    return out
+
+
 def take_report(rep):
-    """A report: {machine, name, kind, metrics:{...}, counters:{...}, cpu_ticks:[total, idle], problems:{key: message}}."""
+    """A report: {machine, name, kind, metrics:{...}, counters:{...}, cpu_ticks:[total, idle], problems:{key: message},
+    notes:{label: text}}."""
     machine = machine_id(rep.get('machine'))
     if not machine:
         raise ValueError('no machine')
@@ -412,6 +428,12 @@ def take_report(rep):
         m = state['machines'].setdefault(machine, {})
         m.update(name=rep.get('name') or machine, last=now, metrics=metrics,
                  problems=dict(rep.get('problems') or {}), kind=rep.get('kind', ''))
+        # Each report replaces the notes; one without them clears them, the way problems are replaced.
+        notes = clean_notes(rep.get('notes'))
+        if notes:
+            m['notes'] = notes
+        else:
+            m.pop('notes', None)
         procs = trail.clean_procs(rep.get('procs'))
         if procs:
             m['procs'] = procs

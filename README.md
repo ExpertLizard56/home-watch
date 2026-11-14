@@ -12,6 +12,7 @@ account and nothing extra installed.
 - A card per machine: CPU, memory, temperature, disk space and free space, how much it read, wrote and sent, how long
   it has been up, and the busiest programs on Linux machines.
 - A page for each machine and each check, with graphs for a day, a week, a month or a year, % up and its outages.
+- Short notes a reporter sends along with its report, shown on the machine's page (a backup's last run, for example).
 - Every check's last 24 hours as a strip, an hour per tick.
 - A Logs section that downloads the system logs the machines sent in, and Home Watch's own: tick All or some machines,
   pick today, 3, 7, 14 days or everything kept, and get one `.log` back, or a `.zip` with one file per machine.
@@ -159,6 +160,9 @@ refuses a change.
 Nothing needs installing on the Home Assistant machine: the add-on reports on it by itself. Other machines send their
 report to port 8790 (`http://<your-home-assistant>:8790/report`). They only send raw counters; Home Watch works out the
 amounts.
+
+A report can also carry `notes`, short `{label: text}` lines the machine wants shown on its page (a backup's last run,
+say). They are information only, never a problem or an alert, and each report replaces them.
 
 ### Windows: `reporters/pc.ps1`
 
