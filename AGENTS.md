@@ -39,7 +39,9 @@ That base image is published for aarch64, amd64 and armv7, which is why `config.
   `Start` after boot and updates; `Setup` (DUMP-protected broadcast) sets it over adb; `MainActivity` is the one screen.
   Checks: `./gradlew :app:lintDebug :app:testDebugUnitTest :app:assembleDebug` in that folder (lint stops on any error).
   Its own `versionCode`/`versionName` in `app/build.gradle`, bumped for each APK released; the add-on's version is
-  separate.
+  separate. Released as a GitHub release tagged `tv-<version>` with the APK attached; boxes with StreamBox Keeper
+  update it from this repo's newest release (it's one of StreamBox Keeper's known apps), so that release must be
+  the newest one, with only that one APK.
 - Root files: `README.md`, `LICENSE`, `repository.yaml` (makes this repo addable as an add-on repository), `ruff.toml`
   (the Python lint rules) and `lefthook.yml` (the checks that run on commit).
 
