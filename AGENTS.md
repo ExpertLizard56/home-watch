@@ -34,7 +34,7 @@ That base image is published for aarch64, amd64 and armv7, which is why `config.
   `android-tv/`, the Home Watch app for TV boxes (Gradle, Java, no AndroidX; package `io.github.expertlizard56.homewatch.tv`).
   `Report` builds the same JSON as the scripts (CPU ticks and temperature through `SelfAdb`, the box's own ADB, only once
   the person allowed it on the screen: unasked, the box's question comes up behind whatever is on and blocks the
-  button's), plus Streaming Box Keeper's status (its read-only provider `content://io.github.expertlizard56.streamingboxkeeper.status`,
+  button's), plus StreamBox Keeper's status (its read-only provider `content://io.github.expertlizard56.streamingboxkeeper.status`,
   rows `name`/`value`) as notes and a `tv-remote` problem; `Alarm` every 5 minutes with `setExactAndAllowWhileIdle`;
   `Start` after boot and updates; `Setup` (DUMP-protected broadcast) sets it over adb; `MainActivity` is the one screen.
   Checks: `./gradlew :app:lintDebug :app:testDebugUnitTest :app:assembleDebug` in that folder (lint stops on any error).

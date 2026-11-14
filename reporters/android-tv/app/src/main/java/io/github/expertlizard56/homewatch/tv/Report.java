@@ -20,7 +20,7 @@ import java.util.Map;
  * The box's report to Home Watch, like the other reporters (README, Reporters): CPU ticks, memory, swap, temperature,
  * storage, network bytes and uptime, as raw counters the hub works the amounts out from. The CPU counters and the
  * temperature need the system shell (SelfAdb), and the same call lets the app use the network for a minute while the
- * box is in deep sleep; until system access is allowed on the screen, the report goes without those. When Streaming Box Keeper is
+ * box is in deep sleep; until system access is allowed on the screen, the report goes without those. When StreamBox Keeper is
  * installed, what its screen shows goes in the notes (its version, last cleanup, restart and app update, the TV
  * remote), and a TV remote problem goes in the problems.
  */
@@ -28,7 +28,7 @@ final class Report {
 
     static final String TAG = "HomeWatch";
     private static final Uri BOX_KEEPER = Uri.parse("content://io.github.expertlizard56.streamingboxkeeper.status");
-    /** Streaming Box Keeper's status names, and the note label each one gets. */
+    /** StreamBox Keeper's status names, and the note label each one gets. */
     private static final String[][] BOX_KEEPER_NOTES = {{"version", "Box Keeper"}, {"lastTidy", "Last cleanup"},
             {"lastRestart", "Last restart"}, {"lastAppUpdate", "Last app update"}, {"tvRemote", "TV remote"}};
 
@@ -119,7 +119,7 @@ final class Report {
         return new long[] {total, Long.parseLong(f[4]) + Long.parseLong(f[5])};
     }
 
-    /** Streaming Box Keeper's status rows into notes, and its TV remote problem (if any) into problems. */
+    /** StreamBox Keeper's status rows into notes, and its TV remote problem (if any) into problems. */
     static void boxKeeper(Map<String, String> status, Map<String, String> notes, Map<String, String> problems) {
         if (status.isEmpty()) return;
         for (String[] n : BOX_KEEPER_NOTES) {
@@ -130,13 +130,13 @@ final class Report {
         if (problem != null && !problem.isEmpty()) problems.put("tv-remote", problem);
     }
 
-    /** Streaming Box Keeper's status (its StatusProvider), name to value; empty if it isn't installed or says nothing. */
+    /** StreamBox Keeper's status (its StatusProvider), name to value; empty if it isn't installed or says nothing. */
     static Map<String, String> boxKeeperStatus(Context context) {
         Map<String, String> status = new LinkedHashMap<>();
         try (Cursor rows = context.getContentResolver().query(BOX_KEEPER, null, null, null, null)) {
             while (rows != null && rows.moveToNext()) status.put(rows.getString(0), rows.getString(1));
         } catch (Exception e) {
-            Log.i(TAG, "no Streaming Box Keeper status: " + e.getMessage());
+            Log.i(TAG, "no StreamBox Keeper status: " + e.getMessage());
         }
         return status;
     }

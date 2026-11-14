@@ -14,7 +14,7 @@ import java.util.concurrent.TimeUnit;
  * temperature, and a minute of network while the box is in deep sleep. Needs network debugging on in the box's
  * developer options, and the box asks once on its screen ("Allow USB debugging?", Always allow) for this app's key
  * (in its files). Until that's answered a connection waits for ever (dadb has no timeout), so every call gives up
- * after 15 seconds. The same as Streaming Box Keeper's, cut down.
+ * after 15 seconds. The same as StreamBox Keeper's, cut down.
  */
 final class SelfAdb {
 

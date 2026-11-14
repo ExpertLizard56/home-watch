@@ -216,7 +216,7 @@ while the box sleeps, and starts again by itself after a restart: memory, swap, 
 For the CPU and the temperature it needs the box's own system access: turn on network debugging (Settings > System >
 Developer options), press **Allow system access** in the app, and answer the box's "Allow USB debugging?" with
 *Always allow*. Without it the rest still goes. If
-[Streaming Box Keeper](https://github.com/ExpertLizard56/streaming-box-keeper) is on the box, what its screen shows
+[StreamBox Keeper](https://github.com/ExpertLizard56/streambox-keeper) is on the box, what its screen shows
 goes in the notes (its last cleanup, restart and app update, the TV remote), and a TV remote that stops answering is a
 problem.
 
