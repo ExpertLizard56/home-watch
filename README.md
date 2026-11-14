@@ -206,7 +206,25 @@ On OpenWrt, copy it to `/usr/bin/homewatch`, add the same line (without the `roo
 `crontab -e`, and add `/usr/bin/homewatch` to `/etc/sysupgrade.conf` so a firmware update keeps it. It also sends each
 program's share of the CPU, from `/proc`.
 
-Either reporter can be run by hand to see what it sends:
+### Android TV boxes: `reporters/android-tv/`
+
+An app called Home Watch for Google TV and Android TV boxes (Android 9 or newer). Install the APK from this repo's
+releases (with a sideloading app such as Downloader, or `adb install`), open it, and type the hub's address
+(`http://homeassistant.local:8790`) and the name the box should have on the hub. It reports every 5 minutes, also
+while the box sleeps, and starts again by itself after a restart: memory, swap, storage, network bytes and uptime.
+
+For the CPU and the temperature it needs the box's own system access: turn on network debugging (Settings > System >
+Developer options), press **Allow system access** in the app, and answer the box's "Allow USB debugging?" with
+*Always allow*. Without it the rest still goes. If
+[Streaming Box Keeper](https://github.com/ExpertLizard56/streaming-box-keeper) is on the box, what its screen shows
+goes in the notes (its last cleanup, restart and app update, the TV remote), and a TV remote that stops answering is a
+problem.
+
+A box can also be set from a computer, without its remote:
+`adb shell am broadcast -a io.github.expertlizard56.homewatch.tv.SET -n io.github.expertlizard56.homewatch.tv/.Setup --es hub http://homeassistant.local:8790 --es name "Living room box"`
+(`--es machine living-room-box` to choose the id too; by default it comes from the name the box had first).
+
+The two scripts can be run by hand to see what it sends:
 `HOMEWATCH_HUB=http://... HOMEWATCH_DRY=1 ./homewatch.sh test "Test"`.
 
 The hub's address has no default. Without `-Hub`/`HOMEWATCH_HUB` the reporter says so and stops, rather than guessing.

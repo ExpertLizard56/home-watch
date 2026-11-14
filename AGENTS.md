@@ -30,7 +30,16 @@ That base image is published for aarch64, amd64 and armv7, which is why `config.
   (`http://[HOST]:8790/health`), which is how Home Assistant restarts a hung add-on. `settings.example.json` and
   `monitors.json` are generic examples; `services.py` copies `monitors.json` into a data folder that has no check list
   yet, and never over one that is already there.
-- `reporters/` — what the other machines run: `pc.ps1` (Windows) and `homewatch.sh` (Linux and OpenWrt/busybox).
+- `reporters/` — what the other machines run: `pc.ps1` (Windows), `homewatch.sh` (Linux and OpenWrt/busybox) and
+  `android-tv/`, the Home Watch app for TV boxes (Gradle, Java, no AndroidX; package `io.github.expertlizard56.homewatch.tv`).
+  `Report` builds the same JSON as the scripts (CPU ticks and temperature through `SelfAdb`, the box's own ADB, only once
+  the person allowed it on the screen: unasked, the box's question comes up behind whatever is on and blocks the
+  button's), plus Streaming Box Keeper's status (its read-only provider `content://io.github.expertlizard56.streamingboxkeeper.status`,
+  rows `name`/`value`) as notes and a `tv-remote` problem; `Alarm` every 5 minutes with `setExactAndAllowWhileIdle`;
+  `Start` after boot and updates; `Setup` (DUMP-protected broadcast) sets it over adb; `MainActivity` is the one screen.
+  Checks: `./gradlew :app:lintDebug :app:testDebugUnitTest :app:assembleDebug` in that folder (lint stops on any error).
+  Its own `versionCode`/`versionName` in `app/build.gradle`, bumped for each APK released; the add-on's version is
+  separate.
 - Root files: `README.md`, `LICENSE`, `repository.yaml` (makes this repo addable as an add-on repository), `ruff.toml`
   (the Python lint rules) and `lefthook.yml` (the checks that run on commit).
 

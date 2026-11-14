@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The home screen tile: the pulse line, wide. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="320dp"
+    android:height="180dp"
+    android:viewportWidth="320"
+    android:viewportHeight="180">
+    <path
+        android:fillColor="#FF1C3A5E"
+        android:pathData="M0,0h320v180h-320z" />
+    <path
+        android:pathData="M40,95h70l18,-45l30,95l20,-50h102"
+        android:strokeWidth="10"
+        android:strokeColor="#FF81C995"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+</vector>

@@ -1,0 +1,66 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'io.github.expertlizard56.homewatch.tv'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId 'io.github.expertlizard56.homewatch.tv'
+        // Android 9 and newer: every Google TV box, and Android TV boxes from about 2019 on.
+        minSdk 28
+        targetSdk 34
+        versionCode 1
+        versionName '0.1.0'
+    }
+
+    signingConfigs {
+        // The release key lives outside the project (keystore.properties, never committed).
+        release {
+            def props = new Properties()
+            def file = rootProject.file('keystore.properties')
+            if (file.exists()) {
+                file.withInputStream { props.load(it) }
+                storeFile = rootProject.file(props['storeFile'])
+                storePassword = props['storePassword']
+                keyAlias = props['keyAlias']
+                keyPassword = props['keyPassword']
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt')
+            signingConfig rootProject.file('keystore.properties').exists() ? signingConfigs.release : signingConfigs.debug
+        }
+    }
+
+    lint {
+        abortOnError true
+        checkReleaseBuilds false
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    // The unit tests (app/src/test) are plain Java: no Android is started for them.
+    testOptions {
+        unitTests.returnDefaultValues = true
+    }
+}
+
+dependencies {
+    // ADB client: the box's own ADB (SelfAdb), for the CPU, the temperature and the network in deep sleep.
+    implementation('dev.mobile:dadb:1.2.7') {
+        // Its published dependencies wrongly include its test tools.
+        exclude group: 'org.junit.platform'
+        exclude group: 'org.junit.jupiter'
+        exclude group: 'junit'
+    }
+    testImplementation 'junit:junit:4.13.2'
+}
