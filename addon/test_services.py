@@ -414,6 +414,76 @@ class Checks(Helpers):
         self.assertEqual(services.status[1]['ms'], 3000)  # and the check's page shows the ping time
 
 
+    # ---- a note check: a note in one of the machine reports, read as plain substrings ----
+
+    def reported_note(self, ago, found):
+        services.machine = lambda mid: {'last': time.time() - ago, 'notes': found}
+
+    def note_check(self, **extra):
+        return {'id': 1, 'type': 'note', 'machine': 'pc', 'label': 'Backup', 'every': 60, 'retries': 0, **extra}
+
+    def test_a_note_check_is_up_when_the_note_says_what_it_should(self):
+        self.reported_note(60, {'Backup': 'last run 2 hours ago, BACKUP OK'})
+        self.assertEqual(services.check_note(self.note_check(good_text='backup ok')), (True, '', 0))
+        self.assertEqual(services.check_note(self.note_check()), (True, '', 0))
+
+    def test_a_note_check_is_down_when_the_bad_text_is_in_it(self):
+        self.reported_note(60, {'Backup': 'last run failed'})
+        ok, detail, ms = services.check_note(self.note_check(good_text='backup', bad_text='FAILED'))
+        self.assertFalse(ok)
+        self.assertEqual(detail, 'last run failed')
+        self.assertEqual(ms, 0)
+
+    def test_a_note_check_is_down_when_the_good_text_is_missing(self):
+        self.reported_note(60, {'Backup': 'last run 2 hours ago'})
+        ok, detail, _ = services.check_note(self.note_check(good_text='ok'))
+        self.assertFalse(ok)
+        self.assertEqual(detail, 'last run 2 hours ago')
+
+    def test_bad_text_wins_over_good_text(self):
+        self.reported_note(60, {'Backup': 'backup ok, but upload failed'})
+        self.assertFalse(services.check_note(self.note_check(good_text='ok', bad_text='failed'))[0])
+        self.reported_note(60, {'Backup': 'backup ok, upload fine'})
+        self.assertTrue(services.check_note(self.note_check(good_text='ok', bad_text='failed'))[0])
+
+    def test_a_missing_note_is_down(self):
+        self.reported_note(60, {'Other': 'fine'})
+        self.assertEqual(services.check_note(self.note_check(good_text='ok')), (False, 'No note called Backup', 0))
+
+    def test_a_stale_report_makes_a_note_check_down(self):
+        self.reported_note(3600, {'Backup': 'backup ok'})
+        ok, detail, _ = services.check_note(self.note_check(good_text='ok'))
+        self.assertFalse(ok)
+        self.assertEqual(detail, "pc hasn't reported for 60 minutes")
+
+    def test_a_note_check_walks_its_retries_and_can_be_off(self):
+        self.write_list([{'name': 'Backup result', 'type': 'note', 'machine': 'pc', 'label': 'Backup',
+                          'bad_text': 'failed', 'every': 60, 'retries': 2, 'off_ok': True}])
+        services.load(self.note)
+        self.reported_note(60, {'Backup': 'backup failed'})
+        self.assertEqual(services.snapshot()[0]['machine'], 'pc')
+        for expected in ('pending', 'pending', 'off'):
+            services.run_one(services.monitors[0], {}, self.note)
+            self.assertEqual(services.status[1]['state'], expected)
+            self.assertEqual(services.status[1]['detail'], 'backup failed')
+
+    def test_validate_a_note_check(self):
+        got, errors = services.validate({'type': 'note', 'name': 'Backup result', 'machine': 'PC',
+                                         'label': 'Backup', 'good_text': 'ok', 'bad_text': 'failed'})
+        self.assertEqual(errors, {})
+        self.assertEqual(got['machine'], 'pc')
+        self.assertEqual(got['label'], 'Backup')
+        self.assertEqual(got['good_text'], 'ok')
+        self.assertEqual(got['bad_text'], 'failed')
+        _, errors = services.validate({'type': 'note', 'name': 'Backup result'})
+        self.assertIn('machine', errors)
+        self.assertIn('label', errors)
+        self.assertIn('good_text', errors)
+        _, errors = services.validate({'type': 'note', 'name': 'Backup result', 'machine': 'pc',
+                                       'label': 'Backup', 'bad_text': 'failed'})
+        self.assertEqual(errors, {})
+
+
 class Api(Helpers):
     """The Checks screen's doors: anyone allowed may look, but only Home Assistant's ingress (a signed-in panel
     request, which the Supervisor marks with X-Remote-User-Id) may change a check."""

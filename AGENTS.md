@@ -115,6 +115,12 @@ runs), `retries` (failures in a row before it counts as down) and whatever its t
   check covers both questions: down with "Not on the network" when the address does not answer (honouring `retries`),
   down with "On the network, but its reporter stopped sending" when it answers but the report is stale, up when both
   are fine. Its response time is then the ping's; without `host` it only watches the reports.
+- `note` (`machine`, `label`, and `good_text` and/or `bad_text`): a note in one of Home watch's own machines' reports says
+  what it should. `label` names the note exactly, and its text is matched as a plain, case-insensitive substring:
+  `bad_text` first, so "not answering" can be bad while "answering" is good, then `good_text`. Up when the note is there
+  and matches; down otherwise, quoting the note's text (cut to 120 characters), with "No note called <label>" when it is
+  missing, or "<machine> hasn't reported for N minutes" when the report is older than the machine check's default 900 s.
+  Like a machine check, it puts itself on that machine's page.
 - `push`: something else calls `/api/push/<code>?status=up&msg=...`; silence longer than `every` (plus 30 s) is down.
 
 Other fields: `off_ok: true` turns "not answering" into a grey `off` instead of `down`, and it is not counted against
@@ -143,7 +149,8 @@ sentence for the form; `services.save_check` writes `monitors.json` whole (an ed
 next free one) and puts the new list in front of the running checks at once. Removing a check drops its code and its
 rows in `services/` and `checks/`, and keeps its number in `removed-ids.json`. An `http` check's `expect` names one exact
 status instead of any 200-299. On start, a `heal` check with no `app` gets its name's slug written in as `app`, so a
-later rename still calls the same self-heal script.
+later rename still calls the same self-heal script. A `note` check's form picks a reported machine, then
+suggests that machine's current note labels.
 
 ### The Machines screen
 
@@ -284,8 +291,9 @@ logged and skipped; the rest of the add-on must still work. A reporter can also 
   history, programs, logs and state dropped), a broken settings file left alone, and the same ingress-only rule;
   `test_services` for the checks' ids (the upgrade, history and codes moving to the id, a rename, a duplicate id, a
   second start changing nothing), for a machine check with and without a `host` (its three states, retries, and the
-  ping time as its response time), for the Checks screen's validation, save, reorder and remove (the id tombstone and
-  the dropped history), for the self-heal `app` that survives a rename, and for the API's ingress-only rule (the same
+  ping time as its response time), for a note check (up, `bad_text` winning over `good_text`, a missing note, a stale
+  report, its retries and `off_ok`, and its validation), for the Checks screen's validation, save, reorder and remove
+  (the id tombstone and the dropped history), for the self-heal `app` that survives a rename, and for the API's ingress-only rule (the same
   list served read-only over the LAN, a change refused without `X-Remote-User-Id`); `test_health` for the watchdog
   door: 200 `ok` while the check loop is going round, 503 with a short reason when it has stopped, the loop marking
   each round it begins, and the door still answering when `allowed_networks` is narrowed. All five use a temporary data

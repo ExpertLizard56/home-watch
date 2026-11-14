@@ -21,7 +21,8 @@ account and nothing extra installed.
 - The add-on reports on itself: space, how much its card writes, and the kernel's SD card errors since boot.
 - A **Checks** screen to add, change, reorder and remove service checks without a restart: ping, TCP port, HTTP, DNS, a
   dynamic-DNS name still matching your public IP, "one of my machines reported lately" (and, given its address, still on
-  the network), and push checks (see below). The list is still a plain JSON file if you prefer to edit it by hand.
+  the network), a note a reporter sends, and push checks (see below). The list is still a plain JSON file if you prefer
+  to edit it by hand.
 - A **Machines** screen to name the machines, put them in the order the page shows, give one its own alert limits, and
   forget one (with its stored data), all without editing a file or restarting.
 
@@ -93,7 +94,8 @@ none):
   {"id": 1, "name": "Router", "group": "Devices", "type": "ping", "host": "192.168.1.1", "every": 60, "retries": 2},
   {"id": 2, "name": "NAS web page", "group": "Services", "type": "http", "url": "http://192.168.1.10/", "every": 60, "retries": 2},
   {"id": 3, "name": "Nightly backup", "group": "Housekeeping", "type": "push", "every": 7200, "retries": 0},
-  {"id": 4, "name": "Workstation", "group": "Devices", "type": "machine", "machine": "pc", "host": "192.168.1.30", "quiet": 900, "every": 60, "retries": 2}
+  {"id": 4, "name": "Workstation", "group": "Devices", "type": "machine", "machine": "pc", "host": "192.168.1.30", "quiet": 900, "every": 60, "retries": 2},
+  {"id": 5, "name": "Backup result", "group": "Housekeeping", "type": "note", "machine": "pc", "label": "Backup", "bad_text": "failed", "every": 300, "retries": 1}
 ]
 ```
 
@@ -112,6 +114,12 @@ that address every round, the way a `ping` check does, so one check covers both 
 its reporter still sending. It is then down with `Not on the network` when the address does not answer, and down with
 `On the network, but its reporter stopped sending` when the address answers but the report is stale. Its response time
 is the ping time. Without `host` the check only watches the reports.
+
+A `note` check watches a note one of Home Watch's own machines sends in its report: `label` names the note exactly,
+and `good_text` and/or `bad_text` are plain text matched anywhere in it, ignoring case. It is up when the note is there
+and holds the good text (if set) and not the bad text (if set); `bad_text` is checked first, so "not answering" can be
+down while "answering" is up. The detail quotes the note's text. A note check is down when its machine has not
+reported for the machine check's default quiet time (900 s), and it puts itself on that machine's page.
 
 An `http` check counts any 200-299 answer as up; add `"expect": 204` (or another code) to require exactly that status.
 `"heal": true` with an `"app"` makes the check a candidate for self-heal: Home Assistant runs
@@ -133,6 +141,9 @@ Open **Checks** on the page (the button at the top right of the overview). It is
 - for a machine check, a picker of the machines that have reported (or type an id for one that has not), an optional
   address to ping too, and the quiet time. It is green only when the device answers the ping (if a host is set) **and**
   its reporter has sent within the quiet time;
+- for a note check, the same picker of reported machines, the note's exact label (suggested from that machine's current
+  notes once it is picked), and the good or bad text to look for. It is green only when the machine has reported lately
+  and its note says the right thing;
 - a short "Make your own reporter" panel with the `/report` URL and the JSON it accepts.
 
 Changing checks is only allowed from Home Assistant's panel (the sidebar), because that is signed in. Opening the page

@@ -1,4 +1,4 @@
-"""Home watch's service checks: ping, port, http, dns, dyndns, push and machine checks, on the page's Checks screen.
+"""Home watch's service checks: ping, port, http, dns, dyndns, push, note and machine checks, on the page's Checks screen.
 
 The list is /share/home-watch/monitors.json (plain, so it can still be edited by hand and restarted). A data folder with
 no list in it yet gets the example list shipped in addon/monitors.json; a list that is already there is never
@@ -11,6 +11,10 @@ in front of the running checks at once, so nothing needs a restart. Each check r
   A machine check may also name a `host`: each round it then pings that address the way a ping check does, and is down
   when the address does not answer ("Not on the network") or answers but the report is stale ("On the network, but its
   reporter stopped sending"); its response time is then the ping's.
+- note (Home watch's own): one of its machines carries a note with the check's `label`, and the note's text says what
+  the check expects: it must hold `good_text` and must not hold `bad_text`, both plain case-insensitive substrings.
+  bad_text is looked for first, so "not answering" can be bad while "answering" is good. A report older than `quiet`
+  seconds (900 by default) is down, since the machine has stopped saying anything.
 
 Every check has an "id": a whole number, unique, never reused. Everything kept about a check is under that id (its
 state, history, outages, push code, pushes), so its "name" is only the label shown: rename it as often as you like and
@@ -75,9 +79,9 @@ HEALTH_STALE = 300  # seconds; older than this without a loop round and GET /hea
 DEFAULT_LIST = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'monitors.json')
 HEAL_SCRIPT = 'script.home_watch_heal_{app}'  # the Home Assistant script self-heal calls; {app} = the check's app
 REMOVED = f'{DATA}/removed-ids.json'  # ids of checks removed on the page, so a new check never takes one
-TYPES = ('ping', 'port', 'http', 'dns', 'dyndns', 'push', 'machine')
+TYPES = ('ping', 'port', 'http', 'dns', 'dyndns', 'push', 'note', 'machine')
 FORM_FIELDS = ('name', 'group', 'type', 'host', 'port', 'url', 'expect', 'name_to_look_up', 'server', 'hostname',
-               'machine', 'quiet', 'every', 'retries', 'off_ok', 'heal', 'app')
+               'machine', 'label', 'good_text', 'bad_text', 'quiet', 'every', 'retries', 'off_ok', 'heal', 'app')
 
 lock = threading.Lock()
 monitors = []
@@ -411,8 +415,27 @@ def validate(raw, current=None):
             errors['quiet'] = bad
         else:
             out['quiet'] = quiet
+    elif kind == 'note':
+        mid = machine_slug(_text(raw, 'machine', 60))
+        if not mid:
+            errors['machine'] = 'Pick a machine that has reported, or type its id.'
+        else:
+            out['machine'] = mid
+        label = _text(raw, 'label', 40)
+        if not label:
+            errors['label'] = "The note's label, exactly as the machine sends it."
+        else:
+            out['label'] = label
+        good = _text(raw, 'good_text', 200)
+        bad = _text(raw, 'bad_text', 200)
+        if good:
+            out['good_text'] = good
+        if bad:
+            out['bad_text'] = bad
+        if not good and not bad:
+            errors['good_text'] = 'Give the text the note should contain, or the text it must not contain.'
     # a push check needs nothing beyond the common fields: something else calls its path
-    if kind != 'machine':
+    if kind not in ('machine', 'note'):
         asked = _text(raw, 'machine', 60)
         mid = machine_slug(asked)
         if asked and not mid:
@@ -704,8 +727,34 @@ def check_machine(m):
     return not problems, '; '.join(problems.values())[:200], ms
 
 
+def check_note(m):
+    """One of Home watch's own machines is still reporting, and the note its report carries says what this check
+    expects. `label` names the note exactly; `good_text` and `bad_text` are plain, case-insensitive substrings of its
+    text. bad_text is looked for first, so "not answering" can be bad while "answering" is good. A report older than
+    `quiet` seconds (900 by default) is down, since the machine has stopped saying anything."""
+    got = machine(m['machine']) if machine else None
+    if not got:
+        return None, 'no report yet', 0
+    quiet = time.time() - got.get('last', 0)
+    if quiet > int(m.get('quiet') or 900):
+        return False, f"{m['machine']} hasn't reported for {int(quiet / 60)} minutes", 0
+    label = str(m.get('label') or '')
+    notes = got.get('notes') or {}
+    if label not in notes:
+        return False, f'No note called {label}', 0
+    text = str(notes[label])
+    low = text.lower()
+    bad = str(m.get('bad_text') or '').strip().lower()
+    if bad and bad in low:
+        return False, text[:120], 0
+    good = str(m.get('good_text') or '').strip().lower()
+    if good and good not in low:
+        return False, text[:120], 0
+    return True, '', 0
+
+
 CHECKS = {'ping': check_ping, 'port': check_port, 'http': check_http, 'dns': check_dns, 'dyndns': check_dyndns,
-          'push': check_push, 'machine': check_machine}
+          'push': check_push, 'note': check_note, 'machine': check_machine}
 
 
 def run_one(m, options, note):

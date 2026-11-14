@@ -11,5 +11,6 @@
   {"id": 10, "name": "NAS SSH", "group": "Services", "type": "port", "host": "192.168.1.10", "port": 22, "every": 60, "retries": 2, "machine": "nas"},
   {"id": 11, "name": "DNS server", "group": "Services", "type": "dns", "name_to_look_up": "example.com", "server": "192.168.1.10", "port": 53, "every": 60, "retries": 2, "heal": true, "app": "dns", "machine": "nas"},
   {"id": 12, "name": "Nightly backup", "group": "Housekeeping", "type": "push", "every": 7200, "retries": 0},
-  {"id": 13, "name": "Sensor gateway", "group": "Housekeeping", "type": "push", "every": 180, "retries": 1, "heal": true, "app": "sensor_gateway", "machine": "nas"}
+  {"id": 13, "name": "Sensor gateway", "group": "Housekeeping", "type": "push", "every": 180, "retries": 1, "heal": true, "app": "sensor_gateway", "machine": "nas"},
+  {"id": 14, "name": "Backup result", "group": "Housekeeping", "type": "note", "machine": "pc", "label": "Backup", "bad_text": "failed", "every": 300, "retries": 1}
 ]

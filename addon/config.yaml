@@ -1,5 +1,5 @@
 name: Home watch
-version: "0.15.0"
+version: "0.16.0"
 slug: home_watch
 description: Keeps an eye on every machine at home (health, history, drive and SD card trouble) and tells your phone through Home Assistant when something's wrong.
 url: https://github.com/ExpertLizard56/home-watch

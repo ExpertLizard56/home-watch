@@ -285,6 +285,7 @@ pre.log { margin:0; font:12px/1.45 ui-monospace, Consolas, monospace; white-spac
 
 <datalist id="cgrouplist"></datalist>
 <datalist id="cmachinelist"></datalist>
+<datalist id="cnotelist"></datalist>
 </main>
 <script>
 const CHARTS = [
@@ -307,12 +308,12 @@ const FACTS = [
   ['disk_free_gb', 'Space free', ' GB'], ['disk_write_mb', 'Written, last 5 min', ' MB'], ['disk_read_mb', 'Read, last 5 min', ' MB'],
   ['net_rx_mb', 'Network in, 5 min', ' MB'], ['net_tx_mb', 'Network out, 5 min', ' MB'], ['wifi_clients', 'Wi-Fi devices', ''],
 ];
-const TYPES = {ping: 'Answers pings', port: 'Port open', http: 'Web page answers', dns: 'Answers DNS', push: 'Reports in', machine: 'Device reports in'};
+const TYPES = {ping: 'Answers pings', port: 'Port open', http: 'Web page answers', dns: 'Answers DNS', push: 'Reports in', machine: 'Device reports in', note: 'Note reads right'};
 // The Checks screen: every field a type reads, with its one-line hint, and the fields each type shows.
 const TYPE_LIST = [['ping', 'Ping'], ['port', 'TCP port'], ['http', 'Web page'], ['dns', 'DNS'],
-  ['dyndns', 'Dynamic DNS'], ['machine', 'Machine reports in'], ['push', 'Push (something reports in)']];
+  ['dyndns', 'Dynamic DNS'], ['machine', 'Machine reports in'], ['note', 'Note says the right thing'], ['push', 'Push (something reports in)']];
 const TYPE_FIELDS = {ping: ['host'], port: ['host', 'port'], http: ['url', 'expect'],
-  dns: ['name_to_look_up', 'server', 'port'], dyndns: ['hostname'], machine: ['machine', 'host', 'quiet'], push: []};
+  dns: ['name_to_look_up', 'server', 'port'], dyndns: ['hostname'], machine: ['machine', 'host', 'quiet'], note: ['machine', 'label', 'good_text', 'bad_text'], push: []};
 const TYPE_HINT = {
   ping: 'Pings an address; up when it answers.',
   port: 'Opens a TCP connection; up when the port accepts it.',
@@ -320,6 +321,7 @@ const TYPE_HINT = {
   dns: 'Asks a DNS server for a name; up when it answers with a record.',
   dyndns: 'Checks that a dynamic-DNS name still points at your public address.',
   machine: 'Green only when the device answers the ping (if a host is set) AND its reporter has sent within the quiet time.',
+  note: 'Green only when the machine has reported lately and its note holds the good text (and not the bad text).',
   push: 'Something else calls the push URL; silence longer than the interval is down.',
 };
 const FIELDS = {
@@ -331,10 +333,13 @@ const FIELDS = {
   server: {label: 'DNS server', hint: 'The address of the DNS server to ask.', placeholder: '192.168.1.10'},
   hostname: {label: 'Host name', hint: 'The dynamic-DNS name that should point at your public address.', placeholder: 'home.example.net'},
   machine: {label: 'Machine', hint: 'Pick a machine that has reported, or type an id for one that has not yet.', list: 'cmachinelist', placeholder: 'pc'},
+  label: {label: 'Note label', hint: "The note's label, exactly as the machine sends it.", list: 'cnotelist', placeholder: 'Backup'},
+  good_text: {label: 'Text it should contain (optional)', hint: 'Plain text anywhere in the note, ignoring case.', placeholder: 'last run ok'},
+  bad_text: {label: 'Text it must not contain (optional)', hint: 'Plain text anywhere in the note, ignoring case. Checked before the good text.', placeholder: 'failed'},
   quiet: {label: 'Quiet time (seconds)', hint: 'How long it may go without a report before it is down. 900 = 15 minutes.', type: 'number', min: 60, max: 86400, placeholder: '900'},
 };
 const TYPE_DEFAULTS = {ping: {every: 60, retries: 2}, port: {every: 60, retries: 2}, http: {every: 60, retries: 2},
-  dns: {every: 60, retries: 2}, dyndns: {every: 1800, retries: 2}, machine: {every: 60, retries: 2, quiet: 900}, push: {every: 300, retries: 0}};
+  dns: {every: 60, retries: 2}, dyndns: {every: 1800, retries: 2}, machine: {every: 60, retries: 2, quiet: 900}, note: {every: 60, retries: 2}, push: {every: 300, retries: 0}};
 const LOG_RANGES = [['1', 'Today'], ['3', 'Last 3 days'], ['7', 'Last 7 days'], ['14', 'Last 14 days'], ['0', 'All kept']];
 let days = 1, status = null, svc = null, outs = [], inside = false;
 let lg = {logs: []}, logPick = new Set(), logDays = '1';
@@ -540,6 +545,17 @@ function fieldInput(key) {
     '" placeholder="' + (f.placeholder || '') + '" autocomplete="off">';
 }
 
+function noteLabels(mid) {
+  const row = ((chk && chk.machines) || []).find(x => x.id === mid);
+  if (row && row.notes) return row.notes;
+  return Object.keys(((status && status.machines[mid]) || {}).notes || {});
+}
+
+function fillNoteList() {
+  const el = $('f_machine'), mid = el ? el.value.trim() : '';
+  $('cnotelist').innerHTML = noteLabels(mid).map(l => '<option value="' + esc(l) + '"></option>').join('');
+}
+
 function renderType() {
   const type = $('f_type').value, keys = TYPE_FIELDS[type] || [];
   $('t_hint').textContent = TYPE_HINT[type] || '';
@@ -548,8 +564,13 @@ function renderType() {
     return '<label id="l_' + key + '">' + f.label + fieldInput(key) +
       '<span class="hint">' + f.hint + '</span><span class="err" id="e_' + key + '"></span></label>';
   }).join('') + (type === 'machine' ? '<span class="hint">Green only when the device answers the ping (if a host is set) AND its reporter has sent within the quiet time. Without a host it only watches the reports.</span>' : '') +
+    (type === 'note' ? '<span class="hint">Green only when the machine has reported within 15 minutes and the note holds the good text (and not the bad text).</span>' : '') +
     (type === 'push' && draft.push ? '<span class="hint">Current push path: <code>' + esc(draft.push) + '</code></span>' : '');
-  $('l_device').hidden = type === 'machine';
+  $('l_device').hidden = type === 'machine' || type === 'note';
+  if (type === 'note' && $('f_machine')) {
+    $('f_machine').addEventListener('input', fillNoteList);
+    fillNoteList();
+  }
 }
 
 function openForm(m) {
@@ -564,7 +585,7 @@ function openForm(m) {
   $('f_every').value = m ? (m.every == null ? TYPE_DEFAULTS[type].every : m.every) : TYPE_DEFAULTS[type].every;
   $('f_retries').value = m ? (m.retries == null ? TYPE_DEFAULTS[type].retries : m.retries) : TYPE_DEFAULTS[type].retries;
   $('f_off_ok').checked = !!(m && m.off_ok);
-  $('f_device').value = m && m.type !== 'machine' ? (m.machine || '') : '';
+  $('f_device').value = m && m.type !== 'machine' && m.type !== 'note' ? (m.machine || '') : '';
   $('f_heal').checked = !!(m && m.heal);
   $('f_app').value = m && m.app ? m.app : '';
   $('l_app').hidden = !$('f_heal').checked;
@@ -618,8 +639,12 @@ function validateForm() {
   } else if (type === 'machine') {
     if (!text('machine')) errors.machine = 'Pick a machine that has reported, or type its id.';
     whole('quiet', 60, 86400, false);
+  } else if (type === 'note') {
+    if (!text('machine')) errors.machine = 'Pick a machine that has reported, or type its id.';
+    if (!text('label')) errors.label = "The note's label, exactly as the machine sends it.";
+    if (!text('good_text') && !text('bad_text')) errors.good_text = 'Give the text the note should contain, or the text it must not contain.';
   }
-  const dev = type === 'machine' ? '' : $('f_device').value.trim();
+  const dev = type === 'machine' || type === 'note' ? '' : $('f_device').value.trim();
   if (dev && !/^[a-z0-9-]+$/.test(dev)) errors.machine = 'Use lowercase letters, digits and hyphens for a machine id.';
   const app = $('f_app').value.trim();
   if ($('f_heal').checked && app && !/^[a-z0-9_]+$/i.test(app)) errors.app = 'Use letters, digits and underscores.';
@@ -632,7 +657,7 @@ function formPayload() {
     name: $('f_name').value.trim(), group: $('f_group').value.trim(), type,
     every: $('f_every').value, retries: $('f_retries').value,
     off_ok: $('f_off_ok').checked, heal: $('f_heal').checked, app: $('f_app').value.trim(),
-    machine: type === 'machine' ? ($('f_machine') ? $('f_machine').value.trim() : '') : $('f_device').value.trim(),
+    machine: type === 'machine' || type === 'note' ? ($('f_machine') ? $('f_machine').value.trim() : '') : $('f_device').value.trim(),
   };
   if ($('f_id').value) out.id = $('f_id').value;
   (TYPE_FIELDS[type] || []).forEach(key => {
@@ -985,7 +1010,7 @@ $('f_type').onchange = () => {
     $('f_retries').value = TYPE_DEFAULTS[type].retries;
   }
   if (type === 'machine' && !draft.quiet) draft.quiet = TYPE_DEFAULTS.machine.quiet;
-  if (type !== 'machine') $('f_device').value = draft.machine || '';
+  if (type !== 'machine' && type !== 'note') $('f_device').value = draft.machine || '';
   renderType();
 };
 $('cform').onsubmit = saveCheck;

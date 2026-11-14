@@ -622,7 +622,8 @@ def checks_payload(can_edit):
     with lock:
         found = {}
         for machine, m in state['machines'].items():
-            found[machine] = {'id': machine, 'name': labels.get(machine) or m.get('name') or machine}
+            found[machine] = {'id': machine, 'name': labels.get(machine) or m.get('name') or machine,
+                             'notes': sorted((m.get('notes') or {}).keys())}
         for row in body['checks']:
             machine = row.get('machine')
             if machine and machine not in found:
