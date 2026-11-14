@@ -39,6 +39,10 @@ Borrowed from Uptime Kuma (github.com/louislam/uptime-kuma, MIT License, Copyrig
 types and their up/down rules, retries with a pending state, the push URL shape (/api/push/<code>?status=&msg=) and
 the webhook message shape ({"heartbeat": {"status", "msg"}, "monitor": {"name"}, "msg"}) that the self-heal
 automation reads.
+
+The Supervisor's watchdog (config.yaml's `watchdog`) asks the hub's GET /health whether the add-on is well, and that
+answer is this module's `last_round`: the time the check loop last began a round. A loop that has stopped going round
+is an add-on that needs restarting, so /health says so (services.health).
 """
 
 import csv
@@ -67,6 +71,7 @@ EVENTS = f'{DATA}/services'
 CHECKS_DIR = f'{DATA}/checks'
 KEEP_MONTHS = 12
 FLUSH = 300  # seconds between rows in the checks file
+HEALTH_STALE = 300  # seconds; older than this without a loop round and GET /health answers 503 (the watchdog restarts)
 DEFAULT_LIST = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'monitors.json')
 HEAL_SCRIPT = 'script.home_watch_heal_{app}'  # the Home Assistant script self-heal calls; {app} = the check's app
 REMOVED = f'{DATA}/removed-ids.json'  # ids of checks removed on the page, so a new check never takes one
@@ -83,6 +88,7 @@ machine = None  # watch.py sets this: machine id -> its latest report (or None)
 heal_script = HEAL_SCRIPT  # watch.py sets this from settings.json
 samples = {}  # check id -> [ok, checks, ms total, ms count] since the last row was written
 cache = {}  # what summary() last worked out, and when
+last_round = time.time()  # when the check loop last began a round; health() reads it for the Supervisor's watchdog
 
 
 def save(path, text):
@@ -801,13 +807,26 @@ def take_push(code, query):
     return True
 
 
+def health(now=None):
+    """(ok, reason) for the Supervisor's watchdog, which asks GET /health (watch.py) whether the add-on is well: the
+    HTTP server answering is half of it (that is this call), and the other half is this module's check loop still going
+    round. A loop that has not begun a round for HEALTH_STALE seconds is stuck (or has died), so the add-on says so and
+    the Supervisor restarts it. The answer holds nothing about the house and no secret."""
+    now = time.time() if now is None else now
+    quiet = now - last_round
+    if quiet > HEALTH_STALE:
+        return False, f'the check loop has not run for {quiet / 60:.0f} min'
+    return True, 'ok'
+
+
 def loop(options, note):
+    global last_round
     load(note)
     note(f"service checks: {len(monitors)} monitors")
     pool = ThreadPoolExecutor(max_workers=16)
     flushed = tidied = time.time()
     while True:
-        now = time.time()
+        now = last_round = time.time()  # /health reads this: a loop that stops marking its rounds is a stuck add-on
         if now - flushed >= FLUSH:
             flushed = now
             try:

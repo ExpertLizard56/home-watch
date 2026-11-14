@@ -25,7 +25,8 @@ That base image is published for aarch64, amd64 and armv7, which is why `config.
   page's Logs section downloads (a `.log` for one machine, a `.zip` of one each for several).
 - `page.html` — the page: one file, plain SVG, no libraries. Five views (everything, one machine, one check, the checks
   editor, the machines editor), routed by the URL fragment (`#<machine>`, `#check:<id>`, `#checks:`, `#machines:`).
-- `config.yaml` — the add-on's metadata and its few options (see version bumps). `settings.example.json` and
+- `config.yaml` — the add-on's metadata and its few options (see version bumps), and its `watchdog`
+  (`http://[HOST]:8790/health`), which is how Home Assistant restarts a hung add-on. `settings.example.json` and
   `monitors.json` are generic examples; `services.py` copies `monitors.json` into a data folder that has no check list
   yet, and never over one that is already there.
 - `reporters/` — what the other machines run: `pc.ps1` (Windows) and `homewatch.sh` (Linux and OpenWrt/busybox).
@@ -206,6 +207,11 @@ comes from the page. Days are clamped to 1-366 (log ranges to 0-366) and the gra
 so a year draws as fast as a day. Both doors — the reports and the page — refuse any address that does not start with
 one of `allowed_networks`. The page also answers on Home Assistant's ingress, so it can sit in the sidebar.
 
+`GET /health` is the add-on's answer to the Supervisor's watchdog (`config.yaml`): 200 `ok` while the HTTP server
+answers and the service-check loop has begun a round within `services.HEALTH_STALE` (300 s), 503 with a short reason
+when it has not. It carries no data and no secret, and it answers before the `allowed_networks` gate, so a house that
+narrows that list cannot turn the watchdog into a restart loop while the add-on is well.
+
 The Checks screen's four changes are `POST /api/checks/save`, `/remove`, `/move` and `/code`; the Machines screen's
 three are `/api/machines/save`, `/move` and `/forget`. All seven are refused (403) unless the request carries
 `X-Remote-User-Id`, the header the Supervisor adds to an ingress request and strips from any copy a client sent; so the
@@ -256,17 +262,19 @@ logged and skipped; the rest of the add-on must still work. A reporter can also 
 - `lefthook.yml` runs on every commit: gitleaks (refuses a commit whose new lines hold a password, token or key — this
   repo is public) and ruff on the staged Python. A fresh checkout needs `lefthook install` once. A refused commit means
   fix what it printed; never skip it (`--no-verify`, `LEFTHOOK=0`).
-- `cd addon && python -m unittest test_logs test_machines test_services` — three test files: `test_logs` for the Logs
-  section's range cut and its `.log` / `.zip`; `test_machines` for the Machines screen's validation, save (the name,
-  the limits, every other key kept, a blank limit meaning the default), move and forget (its settings entry, history,
-  programs, logs and state dropped), a broken settings file left alone, and the same ingress-only rule; `test_services`
-  for the checks' ids (the upgrade, history and codes moving to the id, a rename, a duplicate id, a second start changing
-  nothing), for a machine check with and without a `host` (its three states, retries, and the ping time as its response
-  time), for the Checks screen's validation, save, reorder and remove (the id tombstone and the dropped history), for
-  the self-heal `app` that survives a rename, and for the API's ingress-only rule (the same list served read-only over
-  the LAN, a change refused without `X-Remote-User-Id`). All three use a temporary data folder, so they need nothing
-  else. Otherwise the cheapest proof of a change is ruff plus the local run above: start it on an empty data folder,
-  post a report, fetch `/api/status`, `/api/services` and one graph.
+- `cd addon && python -m unittest test_logs test_machines test_services test_health` — four test files: `test_logs` for
+  the Logs section's range cut and its `.log` / `.zip`; `test_machines` for the Machines screen's validation, save (the
+  name, the limits, every other key kept, a blank limit meaning the default), move and forget (its settings entry,
+  history, programs, logs and state dropped), a broken settings file left alone, and the same ingress-only rule;
+  `test_services` for the checks' ids (the upgrade, history and codes moving to the id, a rename, a duplicate id, a
+  second start changing nothing), for a machine check with and without a `host` (its three states, retries, and the
+  ping time as its response time), for the Checks screen's validation, save, reorder and remove (the id tombstone and
+  the dropped history), for the self-heal `app` that survives a rename, and for the API's ingress-only rule (the same
+  list served read-only over the LAN, a change refused without `X-Remote-User-Id`); `test_health` for the watchdog
+  door: 200 `ok` while the check loop is going round, 503 with a short reason when it has stopped, the loop marking
+  each round it begins, and the door still answering when `allowed_networks` is narrowed. All four use a temporary data
+  folder, so they need nothing else. Otherwise the cheapest proof of a change is ruff plus the local run above: start
+  it on an empty data folder, post a report, fetch `/api/status`, `/api/services` and one graph.
   `python -m py_compile addon/*.py` catches a file
   that will not even import, and if `page.html`'s script changed, `node --check` the script on its own (it is one
   `<script>` block, and the page has no build step).

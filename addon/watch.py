@@ -8,6 +8,10 @@ The parts: watch.py (this: reports, checks, alerts, the web door), history.py (t
 report), services.py (the service checks), trail.py (each machine's busiest programs and the logs machines send),
 page.html (the page).
 
+GET /health answers the Supervisor's watchdog (config.yaml's `watchdog`): 200 "ok" while the service-check loop is
+going round, 503 with a short reason when it has stopped, so Home Assistant restarts an add-on that hangs, not only one
+that exits. It carries no data and no secret.
+
 Borrowed, with credit:
 - Beszel (github.com/henrygd/beszel, MIT License, Copyright (c) 2024 henrygd): reporters send raw counters and the
   hub works out amounts from the change between two reports (Beszel's agent/deltatracker); CPU % from busy/idle
@@ -669,6 +673,14 @@ class Handler(BaseHTTPRequestHandler):
         return self.reply(404, {'error': 'no'})
 
     def do_GET(self):
+        if urlparse(self.path).path.rstrip('/') == '/health':
+            # The Supervisor's watchdog (config.yaml's `watchdog`) calls this every minute and restarts the add-on when
+            # it stops answering or is not well; Home Assistant counts an answer under 300 as healthy and 503 as not.
+            # It answers before the address gate: the answer holds nothing about the house, and a house that narrows
+            # allowed_networks must not be able to turn a healthy add-on into a restart loop. (The Supervisor's own
+            # address, 172.30.32.x, is in the default list in any case.) The answer is one word and a reason.
+            ok, why = services.health()
+            return self.reply(200 if ok else 503, 'ok' if ok else why, 'text/plain; charset=utf-8')
         if not self.client_address[0].startswith(networks):
             return self.reply(403, {'error': 'no'})
         url = urlparse(self.path)
