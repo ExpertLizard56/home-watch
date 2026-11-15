@@ -46,12 +46,8 @@ Home Assistant builds it on the machine it runs on. It fits `aarch64` (64-bit Ra
 ## First run
 
 **Phone notices.** Every notice is left in Home Assistant's notifications (the bell in the sidebar) and then sent to
-the phones. Leave the `phones` option empty and every notify service whose name starts with `mobile_app_` gets it — that
-is every phone signed in to the Home Assistant app. To pick your own, list the notify services, comma-separated:
-
-```yaml
-phones: mobile_app_my_phone, mobile_app_my_tablet
-```
+every phone: each notify service whose name starts with `mobile_app_`, which is every phone signed in to the Home
+Assistant app.
 
 To silence the phones for a while, write the time to start again in `/share/phone-quiet-until.txt`, as an ISO time with
 a zone:

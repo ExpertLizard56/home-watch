@@ -196,8 +196,7 @@ new code, which stops the old path working.
 `send(title, message)` follows the phone-notice rule shared by the three Pi add-ons (Media Hub, Home watch, Home
 upkeep). (1) Every notice is left in Home Assistant's notifications: `POST
 /core/api/services/persistent_notification/create` through the Supervisor, which is why `config.yaml` has
-`homeassistant_api: true`. (2) It then goes to the phones: the `phones` option's notify services, comma-separated, or,
-when that is blank, every `notify` service whose name starts `mobile_app_` (read from `GET /core/api/services`); one
+`homeassistant_api: true`. (2) It then goes to every phone: each `notify` service whose name starts `mobile_app_` (read from `GET /core/api/services`); one
 `POST /core/api/services/notify/<name>` per phone, with `title`, `message` and empty `data`. (3) While
 `/share/phone-quiet-until.txt` holds an ISO time with a zone still in the future, step 2 is skipped and that is logged
 (step 1 still happens); a missing file, bad text or a time without a zone all mean not quiet. (4) A failure is logged,
@@ -295,7 +294,7 @@ logged and skipped; the rest of the add-on must still work. A reporter can also 
   fix what it printed; never skip it (`--no-verify`, `LEFTHOOK=0`).
 - `cd addon && python -m unittest test_alerts test_logs test_machines test_services test_health` — five test files:
   `test_alerts` for the phone notices (the quiet file: a future time with a zone is quiet, while a past time, a
-  missing file, bad text and a time without a zone are not; a blank `phones` meaning every `mobile_app_` service;
+  missing file, bad text and a time without a zone are not; every `mobile_app_` service being a phone;
   the persistent notification still posted while quiet; and a failure logged rather than raised); `test_logs` for
   the Logs section's range cut and its `.log` / `.zip`; `test_machines` for the Machines screen's validation, save (the
   name, the limits, every other key kept, a blank limit meaning the default), move and forget (its settings entry,
@@ -333,7 +332,7 @@ ideas only, no code. The detail is at the top of each module.
 - End every commit message with a line naming the AI and its model, so a later reader can tell who changed what, e.g.
   `Co-Authored-By: Cline (Claude Sonnet) <noreply@cline.bot>` (Claude adds its own).
 - Nothing secret goes in git, and this repo is public: webhook addresses (`self_heal_webhook` is an add-on option, not a
-  file), your own notify service names (the `phones` option, also not a file), push codes (they live in
+  file), push codes (they live in
   `push-codes.json` in the data folder), and any real address,
   hostname or machine name. The example files — `addon/monitors.json`, `addon/settings.example.json`, the README's
   blocks — stay generic: made-up machine names, a private LAN range, `example.com`.

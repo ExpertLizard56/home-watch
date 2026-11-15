@@ -1,5 +1,5 @@
 name: Home watch
-version: "0.16.0"
+version: "0.16.1"
 slug: home_watch
 description: Keeps an eye on every machine at home (health, history, drive and SD card trouble) and tells your phone through Home Assistant when something's wrong.
 url: https://github.com/ExpertLizard56/home-watch
@@ -27,17 +27,15 @@ map:
 # Reads the kernel log (SD card errors) through the Supervisor.
 hassio_api: true
 hassio_role: manager
-# Leaves every notice in Home Assistant's notifications and sends it to the phones through its notify services.
+# Leaves every notice in Home Assistant's notifications and sends it to every phone (each mobile_app_ notify service).
 homeassistant_api: true
 # Your own names and numbers (machine labels and order, limits, log senders, who may report, the self-heal script
 # name) are not options: they are /share/home-watch/settings.json, read at start (see settings.example.json).
 options:
-  phones: ""
   silent_hours: 6
   self_heal: false
   self_heal_webhook: ""
 schema:
-  phones: str
   silent_hours: int(1,168)
   self_heal: bool
   self_heal_webhook: str

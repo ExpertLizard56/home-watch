@@ -92,19 +92,13 @@ SERVICES = [
 
 
 class Phones(Helpers):
-    def test_a_blank_option_takes_every_mobile_app_service(self):
+    def test_every_mobile_app_service_is_a_phone(self):
         with mock.patch.object(watch.urllib.request, 'urlopen', return_value=Reply(SERVICES)) as urlopen:
             self.assertEqual(watch.phone_names(), ['mobile_app_one', 'mobile_app_two'])
         self.assertEqual(urlopen.call_count, 1)
         req = urlopen.call_args[0][0]
         self.assertEqual(req.full_url, 'http://supervisor/core/api/services')
         self.assertEqual(req.get_method(), 'GET')
-
-    def test_a_listed_set_is_used_as_given_without_asking(self):
-        watch.options['phones'] = ' mobile_app_kitchen , notify.mobile_app_hall '
-        with mock.patch.object(watch.urllib.request, 'urlopen') as urlopen:
-            self.assertEqual(watch.phone_names(), ['mobile_app_kitchen', 'mobile_app_hall'])
-        urlopen.assert_not_called()
 
     def test_no_notify_domain_means_no_phone(self):
         found = [{'domain': 'light', 'services': {'mobile_app_x': {}}}]
@@ -114,7 +108,7 @@ class Phones(Helpers):
 
 class Send(Helpers):
     def test_a_notice_is_left_in_notifications_and_goes_to_the_phones(self):
-        watch.options['phones'] = 'mobile_app_kitchen'
+        self.enterContext(mock.patch.object(watch, 'phone_names', return_value=['mobile_app_kitchen']))
         got, calls = self.sent()
         self.assertTrue(got)
         self.assertEqual(calls, [
@@ -125,7 +119,7 @@ class Send(Helpers):
         ])
 
     def test_a_quiet_house_still_gets_the_notification_but_no_phone(self):
-        watch.options['phones'] = 'mobile_app_kitchen'
+        self.enterContext(mock.patch.object(watch, 'phone_names', return_value=['mobile_app_kitchen']))
         self.quiet(self.time_with_zone(3))
         got, calls = self.sent()
         self.assertTrue(got)
@@ -139,7 +133,7 @@ class Send(Helpers):
         self.assertTrue(any('could not leave a notification' in text for text in self.notes))
 
     def test_one_phone_failing_does_not_stop_the_next_or_the_notice(self):
-        watch.options['phones'] = 'mobile_app_kitchen,mobile_app_hall'
+        self.enterContext(mock.patch.object(watch, 'phone_names', return_value=['mobile_app_kitchen', 'mobile_app_hall']))
         replies = [Reply({'ok': True}), OSError('phone off'), Reply({'ok': True})]
         with mock.patch.object(watch.urllib.request, 'urlopen', side_effect=replies):
             self.assertTrue(watch.send('NAS', 'Drive is full'))

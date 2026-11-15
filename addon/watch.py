@@ -522,14 +522,7 @@ def quiet_until():
 
 
 def phone_names():
-    """The notify services a notice goes to: the `phones` option's names, or every mobile_app_ service when it is blank.
-
-    A blank option asks Home Assistant for its notify services and takes the ones the companion app makes, which all
-    start mobile_app_."""
-    listed = [name.strip().removeprefix('notify.') for name in str(options.get('phones') or '').split(',')]
-    names = [name for name in listed if name]
-    if names:
-        return names
+    """The notify services a notice goes to: every one the companion app makes (they all start mobile_app_)."""
     for domain in supervisor_call('/core/api/services') or []:
         if isinstance(domain, dict) and domain.get('domain') == 'notify':
             return [name for name in (domain.get('services') or {}) if name.startswith('mobile_app_')]
@@ -540,8 +533,8 @@ def send(title, message):
     """One notice: into Home Assistant's notifications, then to the phones unless the house is quiet.
 
     The shared phone-notice rule of the three Pi add-ons (Media Hub, Home watch, Home upkeep): every notice is also
-    left in Home Assistant's notifications, the durable record; then it goes to the phones, the `phones` option's notify
-    services or, when that is blank, every mobile_app_ service; while QUIET_FILE holds a future time step 2 is skipped
+    left in Home Assistant's notifications, the durable record; then it goes to every phone (each mobile_app_ notify
+    service); while QUIET_FILE holds a future time step 2 is skipped
     and that is logged; and a failure is logged, never raised. The persistent notification is what says the notice got
     through: a phone that cannot be reached does not make the add-on send the same alert again."""
     posted = False
