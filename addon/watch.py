@@ -536,7 +536,25 @@ def send(title, message):
     left in Home Assistant's notifications, the durable record; then it goes to every phone (each mobile_app_ notify
     service); while QUIET_FILE holds a future time step 2 is skipped
     and that is logged; and a failure is logged, never raised. The persistent notification is what says the notice got
-    through: a phone that cannot be reached does not make the add-on send the same alert again."""
+    through: a phone that cannot be reached does not make the add-on send the same alert again.
+
+    Outside Home Assistant (env NTFY_URL, an ntfy topic) the notice goes there instead, as one POST; True when ntfy took
+    it (or the phones are quiet, so it is not tried again)."""
+    topic = os.environ.get('NTFY_URL', '').strip()
+    if topic:
+        until = quiet_until()
+        if until:
+            note(f"phones quiet until {until.isoformat()}: {title} - {message}")
+            return True
+        try:
+            req = urllib.request.Request(topic, data=message.encode('utf-8'), method='POST',
+                                         headers={'Title': title.encode('utf-8').decode('latin-1')})
+            with urllib.request.urlopen(req, timeout=20) as r:
+                r.read()
+            return True
+        except Exception as e:
+            note(f"could not send to ntfy: {title} - {message} ({e})")
+            return False
     posted = False
     try:
         supervisor_call('/core/api/services/persistent_notification/create', {'title': title, 'message': message})
@@ -601,11 +619,16 @@ def loop():
 
 # ---- the page and the report door ---------------------------------------------------------------------------------
 
-def ingress_request(headers):
-    """Whether Home Assistant's ingress proxied this request for a signed-in user. The Supervisor adds
-    X-Remote-User-Id itself and strips any copy a client sent, so only a request carrying it may change the checks or
-    the machines; the add-on's own port (and every other address) can view them but not change them."""
-    return bool(str(headers.get('X-Remote-User-Id') or '').strip())
+TRUSTED_PROXIES = ('172.30.32.2', '127.0.0.1', '::1', '::ffff:127.0.0.1')
+
+
+def ingress_request(headers, address):
+    """Whether a login proxy sent this request for a signed-in user: Home Assistant's ingress (172.30.32.2) or a proxy
+    on this same machine (127.0.0.1), which set X-Remote-User-Id and stripped any copy a client sent. Only such a
+    request may change the checks or the machines. The header counts only from those addresses: with host networking
+    any device could send it straight to the add-on's port, and those (and every other address) can view but not
+    change."""
+    return address in TRUSTED_PROXIES and bool(str(headers.get('X-Remote-User-Id') or '').strip())
 
 
 def checks_payload(can_edit):
@@ -684,7 +707,7 @@ class Handler(BaseHTTPRequestHandler):
         if len(parts) >= 3 and parts[-3] == 'api' and parts[-2] in ('checks', 'machines'):
             # The Checks and Machines screens change the add-on's own files. Only Home Assistant's ingress may: that is
             # the signed-in panel.
-            if not ingress_request(self.headers):
+            if not ingress_request(self.headers, self.client_address[0]):
                 return self.reply(403, {'error': f'{parts[-2].title()} can only be changed from the Home Assistant panel.'})
             body = self.json_body()
             if body is None:
@@ -796,9 +819,9 @@ class Handler(BaseHTTPRequestHandler):
             uptime, strips = services.summary()
             return self.reply(200, {'monitors': services.snapshot(), 'uptime': uptime, 'strips': strips})
         if last == 'checks':
-            return self.reply(200, checks_payload(ingress_request(self.headers)))
+            return self.reply(200, checks_payload(ingress_request(self.headers, self.client_address[0])))
         if last == 'machines':
-            return self.reply(200, machines_payload(ingress_request(self.headers)))
+            return self.reply(200, machines_payload(ingress_request(self.headers, self.client_address[0])))
         if last == 'logs':
             return self.reply(200, {'logs': log_rows()})
         if last in ('check', 'outages', 'history'):

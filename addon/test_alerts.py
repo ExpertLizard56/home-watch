@@ -143,3 +143,47 @@ class Send(Helpers):
 if __name__ == '__main__':
     unittest.main()
 
+
+
+class Ntfy(Helpers):
+    """Outside Home Assistant: NTFY_URL set, the notice is one POST to that topic and nothing goes to the Supervisor."""
+
+    def setUp(self):
+        super().setUp()
+        env = mock.patch.dict(os.environ, {'NTFY_URL': 'http://127.0.0.1:8095/home'})
+        env.start()
+        self.addCleanup(env.stop)
+
+    def test_one_post_to_the_topic_with_the_title(self):
+        with mock.patch.object(watch.urllib.request, 'urlopen', return_value=Reply()) as urlopen:
+            self.assertTrue(watch.send('NAS', 'Drive is 91% full'))
+        self.assertEqual(urlopen.call_count, 1)
+        req = urlopen.call_args[0][0]
+        self.assertEqual((req.full_url, req.get_method(), req.data), ('http://127.0.0.1:8095/home', 'POST',
+                                                                      b'Drive is 91% full'))
+        self.assertEqual(req.get_header('Title'), 'NAS')
+
+    def test_quiet_sends_nothing(self):
+        self.quiet(self.time_with_zone(2))
+        with mock.patch.object(watch.urllib.request, 'urlopen') as urlopen:
+            self.assertTrue(watch.send('NAS', 'Drive is full'))
+        urlopen.assert_not_called()
+
+    def test_a_failure_is_logged_not_raised(self):
+        with mock.patch.object(watch.urllib.request, 'urlopen', side_effect=OSError('refused')):
+            self.assertFalse(watch.send('NAS', 'Drive is full'))
+        self.assertTrue(any('ntfy' in n for n in self.notes))
+
+
+class TrustedHeader(unittest.TestCase):
+    """X-Remote-User-Id only counts from a login proxy: ingress or this same machine."""
+
+    def test_only_proxies_with_the_header_may_change(self):
+        user = {'X-Remote-User-Id': 'abc'}
+        self.assertTrue(watch.ingress_request(user, '172.30.32.2'))
+        self.assertTrue(watch.ingress_request(user, '127.0.0.1'))
+        self.assertTrue(watch.ingress_request(user, '::1'))
+        self.assertFalse(watch.ingress_request(user, '192.168.1.50'))      # a device on the home network
+        self.assertFalse(watch.ingress_request(user, '172.27.66.2'))       # WireGuard
+        self.assertFalse(watch.ingress_request({}, '127.0.0.1'))
+        self.assertFalse(watch.ingress_request({'X-Remote-User-Id': ' '}, '172.30.32.2'))
