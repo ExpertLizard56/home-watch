@@ -70,7 +70,7 @@ options = {}
 order = []               # machine ids in the order settings.json lists them, which is the order the page shows
 labels = {}              # machine id -> the name the page shows for it, from settings.json
 limits = {}              # machine id -> {temp, mem, disk_used_pct, cpu_busy} of its own, from settings.json
-networks = DEFAULT_NETWORKS  # address prefixes allowed to post reports and to open the page, from settings.json
+networks = DEFAULT_NETWORKS  # address prefixes allowed to post reports and to open the page, from settings.json (push calls skip it)
 senders = {}             # syslog sender IP -> machine id, from settings.json (trail.py)
 heal_script = services.HEAL_SCRIPT  # the Home Assistant script self-heal calls, {app} filled in per check
 
@@ -767,15 +767,18 @@ class Handler(BaseHTTPRequestHandler):
             # address, 172.30.32.x, is in the default list in any case.) The answer is one word and a reason.
             ok, why = services.health()
             return self.reply(200 if ok else 503, 'ok' if ok else why, 'text/plain; charset=utf-8')
-        if not self.client_address[0].startswith(networks):
-            return self.reply(403, {'error': 'no'})
         url = urlparse(self.path)
         q = parse_qs(url.query)
         parts = url.path.rstrip('/').split('/')
         last = parts[-1]
         if len(parts) >= 2 and parts[-2] == 'push':  # Uptime Kuma's push URL shape, so a pusher only changes port and code
+            # Also before the address gate: the code is the secret (128 bits, compared in constant time), as in Uptime
+            # Kuma and Healthchecks, so a job can report from any address it has, such as another add-on on Home
+            # Assistant's internal network (172.30.33.x). The answer says only whether the code was right.
             ok = services.take_push(last, q)
             return self.reply(200 if ok else 404, {'ok': ok})
+        if not self.client_address[0].startswith(networks):
+            return self.reply(403, {'error': 'no'})
         if len(parts) >= 2 and parts[-2] == 'logs' and last == 'download':
             # The page's Logs section: one machine's log is a .log, several are a .zip holding one .log each.
             try:

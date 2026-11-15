@@ -100,7 +100,7 @@ works.
 - `limits` — `{"<machine>": {"temp": ..., "mem": ..., "disk_used_pct": ..., "cpu_busy": ...}}`: one machine's own
   numbers instead of the generic `LIMITS` in `watch.py`.
 - `log_senders` — `{"<ip>": "<machine>"}`: which address belongs to which machine, for the syslog trail.
-- `allowed_networks` — the address prefixes allowed to post reports and open the page. Default: the private ranges and
+- `allowed_networks` — the address prefixes allowed to post reports and open the page (push calls skip it). Default: the private ranges and
   Home Assistant's ingress. A missing or empty list falls back to that default, so a typo cannot lock the page out.
 - `heal_script` — the Home Assistant script self-heal calls, with `{app}` filled in per check (default
   `script.home_watch_heal_{app}`). A value with no `{app}` is refused out loud, since it would call one script for every
@@ -235,7 +235,8 @@ plus the hub's own log) and `/api/logs/download?machines=&days=`, which answers 
 for several, with `days` 0 meaning everything kept. Only the names `/api/logs` itself listed are accepted, so no path
 comes from the page. Days are clamped to 1-366 (log ranges to 0-366) and the graphs are averaged into about 300 points
 so a year draws as fast as a day. Both doors — the reports and the page — refuse any address that does not start with
-one of `allowed_networks`. The page also answers on Home Assistant's ingress, so it can sit in the sidebar.
+one of `allowed_networks`, apart from `/api/push/<code>`, which answers before that gate: its code is the secret, so
+another add-on on Home Assistant's internal network (172.30.33.x) or a job anywhere can push without host networking. The page also answers on Home Assistant's ingress, so it can sit in the sidebar.
 
 `GET /health` is the add-on's answer to the Supervisor's watchdog (`config.yaml`): 200 `ok` while the HTTP server
 answers and the service-check loop has begun a round within `services.HEALTH_STALE` (300 s), 503 with a short reason

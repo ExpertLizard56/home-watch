@@ -77,7 +77,8 @@ writes it for you; every key is optional, so a missing file is normal, and editi
 - `limits` gives one machine its own `temp`, `mem`, `disk_used_pct` or `cpu_busy` instead of the generic number.
 - `log_senders` says which IP belongs to which machine, for the system-log trail (machines send their syslog to UDP
   5514).
-- `allowed_networks` lists the address prefixes allowed to post reports and open the page.
+- `allowed_networks` lists the address prefixes allowed to post reports and open the page. Push checks don't use it:
+  their code is the password, so a job can report from any address, other add-ons included.
 
 **`/share/home-watch/monitors.json`** is the service check list. The page's **Checks** screen (below) is the main way
 to change it: it writes the file for you, keeps each check's `id`, and the running checks pick the change up without a
@@ -253,7 +254,7 @@ carries the code, not the name, so renaming the check does not change it, and th
 - The Supervisor `manager` role, which is what lets it ask the Supervisor for the host's kernel log. That log is how it
   notices SD and eMMC card errors on the machine it runs on, which is the trouble a worn-out card shows first.
 - Host networking, so the other machines can reach port 8790. Only the private address ranges may post reports or open
-  the page by default (`allowed_networks` in `settings.json`).
+  the page by default (`allowed_networks` in `settings.json`); a push check's call is let in by its code instead.
 - No internet access of its own. It only makes the connections your checks ask for, and leaves its notices in Home
   Assistant.
 
