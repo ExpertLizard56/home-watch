@@ -204,7 +204,7 @@ program's share of the CPU, from `/proc`.
 
 ### Android TV boxes: `reporters/android-tv/`
 
-An app called Home Watch for Google TV and Android TV boxes (Android 9 or newer). Install the APK from this repo's
+An app called Home Watch Reporter for Google TV and Android TV boxes (Android 9 or newer). Install the APK from this repo's
 releases (with a sideloading app such as Downloader, or `adb install`), open it, and type the hub's address
 (`http://homeassistant.local:8790`) and the name the box should have on the hub. It reports every 5 minutes, also
 while the box sleeps, and starts again by itself after a restart: memory, swap, storage, network bytes and uptime.

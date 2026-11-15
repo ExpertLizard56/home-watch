@@ -37,7 +37,7 @@ public class MainActivity extends Activity {
         page.setPadding(pad * 2, pad, pad * 2, pad);
         page.setBackgroundColor(Color.rgb(18, 22, 28));
 
-        page.addView(text("Home Watch", 30, Color.WHITE));
+        page.addView(text("Home Watch Reporter", 30, Color.WHITE));
         page.addView(text("Sends this box's health (CPU, memory, temperature, storage, network) to your Home Watch hub "
                 + "every 5 minutes, even while it sleeps.", 16, Color.LTGRAY));
 

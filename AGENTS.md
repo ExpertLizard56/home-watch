@@ -31,7 +31,7 @@ That base image is published for aarch64, amd64 and armv7, which is why `config.
   `monitors.json` are generic examples; `services.py` copies `monitors.json` into a data folder that has no check list
   yet, and never over one that is already there.
 - `reporters/` — what the other machines run: `pc.ps1` (Windows), `homewatch.sh` (Linux and OpenWrt/busybox) and
-  `android-tv/`, the Home Watch app for TV boxes (Gradle, Java, no AndroidX; package `io.github.expertlizard56.homewatch.tv`).
+  `android-tv/`, Home Watch Reporter, the app for TV boxes (Gradle, Java, no AndroidX; package `io.github.expertlizard56.homewatch.tv`).
   `Report` builds the same JSON as the scripts (CPU ticks and temperature through `SelfAdb`, the box's own ADB, only once
   the person allowed it on the screen: unasked, the box's question comes up behind whatever is on and blocks the
   button's), plus StreamBox Keeper's status (its read-only provider `content://io.github.expertlizard56.streamingboxkeeper.status`,
