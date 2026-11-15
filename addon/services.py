@@ -51,6 +51,7 @@ is an add-on that needs restarting, so /health says so (services.health).
 
 import csv
 import hmac
+import http.client
 import io
 import json
 import os
@@ -64,6 +65,7 @@ import subprocess
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
@@ -90,6 +92,10 @@ pushes = {}  # check id -> (time, ok, msg)
 codes = {}  # check id (as a string) -> its push code; a new dict on every load()
 machine = None  # watch.py sets this: machine id -> its latest report (or None)
 heal_script = HEAL_SCRIPT  # watch.py sets this from settings.json
+heal_containers = {}  # {app: container name}: watch.py sets this from settings.json; restarted through Docker
+healed = {}  # {app: when its container was last restarted}
+HEAL_COOLDOWN = 900  # seconds between two restarts of one app, as the Home Assistant script's 15 min wait
+DOCKER_SOCKET = '/var/run/docker.sock'
 samples = {}  # check id -> [ok, checks, ms total, ms count] since the last row was written
 cache = {}  # what summary() last worked out, and when
 last_round = time.time()  # when the check loop last began a round; health() reads it for the Supervisor's watchdog
@@ -817,9 +823,61 @@ def app_name(m):
     return re.sub(r'[^a-z0-9]+', '_', got.lower()).strip('_')
 
 
+class DockerSocket(http.client.HTTPConnection):
+    """HTTP to the Docker Engine over its unix socket (no extra library)."""
+
+    def __init__(self, path=DOCKER_SOCKET, timeout=60):
+        super().__init__('localhost', timeout=timeout)
+        self.socket_path = path
+
+    def connect(self):
+        self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.sock.settimeout(self.timeout)
+        self.sock.connect(self.socket_path)
+
+
+def restart_container(name):
+    """Restart one container through the Docker Engine API; raises on anything but 204."""
+    conn = DockerSocket()
+    try:
+        conn.request('POST', f'/containers/{urllib.parse.quote(name, safe="")}/restart?t=20')
+        resp = conn.getresponse()
+        body = resp.read().decode('utf-8', 'replace')[:200]
+        if resp.status != 204:
+            raise RuntimeError(f'docker {resp.status}: {body}')
+    finally:
+        conn.close()
+
+
+def heal_container(m, state, options, note, now=None):
+    """Outside Home Assistant: restart the check's container (settings.json's heal_containers, {app: container}) when it
+    goes down. The same rule the Home Assistant script has: one restart, then HEAL_COOLDOWN before the next for that
+    app. Only when the add-on's self_heal option is on."""
+    app = app_name(m)
+    name = heal_containers.get(app)
+    if state != 'down':
+        return
+    if not options.get('self_heal'):
+        note(f"would restart {name} for {m['name']} but self_heal is off")
+        return
+    now = time.time() if now is None else now
+    if now - healed.get(app, 0) < HEAL_COOLDOWN:
+        note(f"self-heal waits: {name} was restarted under {HEAL_COOLDOWN // 60} min ago")
+        return
+    healed[app] = now
+    try:
+        restart_container(name)
+        note(f"self-heal: restarted {name} ({m['name']} down)")
+    except Exception as e:
+        note(f"self-heal could not restart {name}: {e}")
+
+
 def heal(m, state, detail, options, note):
     """Post the message Home Assistant's self-heal automation reads, naming the script it should run
-    (settings.json's heal_script with {app} filled in). Only when the add-on's self_heal option is on."""
+    (settings.json's heal_script with {app} filled in). Only when the add-on's self_heal option is on.
+    An app listed in heal_containers is restarted through Docker instead (heal_container)."""
+    if app_name(m) in heal_containers:
+        return heal_container(m, state, options, note)
     hook = options.get('self_heal_webhook')
     script = heal_script.replace('{app}', app_name(m))
     if not options.get('self_heal') or not hook:

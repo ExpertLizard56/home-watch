@@ -5,6 +5,7 @@ checks look for elsewhere: kernel card errors since the machine started, the car
 how much it writes. eMMC wear is read the way Beszel does (agent/emmc_linux.go, MIT) in case it boots from eMMC.
 """
 
+import errno
 import glob
 import os
 import re
@@ -18,6 +19,7 @@ LIMITS = {
     'writes_gb': 2,   # a day, and 3x the usual, before it's called a lot
 }
 CARD_ERRORS = re.compile(r'mmc\d.*(error|timeout|fail)|I/O error|EXT4-fs error|remount.*read-only', re.IGNORECASE)
+KMSG = '/dev/kmsg'
 KERNEL_LOGS = ('/host/logs/boots/0/identifiers/kernel', '/host/logs/identifiers/kernel')
 
 seen = {'card_errors': None}
@@ -38,13 +40,44 @@ def supervisor(path, accept='application/json'):
         return r.read().decode('utf-8', 'replace')
 
 
+def kmsg(path=KMSG):
+    """The kernel log since boot, read straight from /dev/kmsg (outside Home Assistant: the container gets it mounted
+    read-only). One record per read; reading stops when nothing is left. Each record is "pri,seq,time,flags;text"."""
+    lines = []
+    fd = os.open(path, os.O_RDONLY | getattr(os, 'O_NONBLOCK', 0))
+    try:
+        while True:
+            try:
+                record = os.read(fd, 8192)
+            except BlockingIOError:
+                break
+            except OSError as e:
+                if e.errno == errno.EPIPE:  # a record was overwritten while reading: skip it
+                    continue
+                raise
+            if not record:
+                break
+            lines.append(record.decode('utf-8', 'replace').split(';', 1)[-1].split('\n', 1)[0])
+    finally:
+        os.close(fd)
+    return '\n'.join(lines)
+
+
+def kernel_texts():
+    """Where the kernel log can come from: the Supervisor (inside Home Assistant, role manager) or /dev/kmsg."""
+    if os.environ.get('SUPERVISOR_TOKEN'):
+        return [lambda path=path: supervisor(path, 'text/plain') for path in KERNEL_LOGS]
+    return [kmsg]
+
+
 def card_errors(note):
-    """Kernel messages since the machine started that say the card is in trouble. Needs the add-on's Supervisor
-    role manager, the only way the Supervisor lets an add-on read the kernel log."""
+    """Kernel messages since the machine started that say the card is in trouble. Inside Home Assistant this needs
+    the add-on's Supervisor role manager, the only way the Supervisor lets an add-on read the kernel log; outside it,
+    /dev/kmsg mounted into the container."""
     last = None
-    for path in KERNEL_LOGS:
+    for get in kernel_texts():
         try:
-            text = supervisor(path, 'text/plain')
+            text = get()
         except Exception as e:
             last = e
             continue

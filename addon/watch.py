@@ -103,8 +103,9 @@ def load_settings(note=None):
     Every key is optional and a missing file is the normal first run; nothing in it is secret. Read at start and again
     after a change from the page's Machines screen, which writes the file: machines (the page's order, and labels),
     limits (one machine's own numbers), log_senders (which address is which machine, for the syslog trail),
-    allowed_networks (who may post reports and open the page) and heal_script (the Home Assistant script self-heal
-    calls, {app} filled in per check)."""
+    allowed_networks (who may post reports and open the page), heal_script (the Home Assistant script self-heal
+    calls, {app} filled in per check) and heal_containers ({app: container}: outside Home Assistant, self-heal restarts
+    that container through Docker instead)."""
     global order, labels, limits, networks, heal_script
     got, read = {}, False
     try:
@@ -157,6 +158,9 @@ def load_settings(note=None):
         heal_script = asked.strip()
     elif asked and note:  # a pattern with no {app} would call one script for every app: say so
         note(f"settings.json: heal_script has no {{app}} in it, so it is not used ({services.HEAL_SCRIPT})")
+    asked = got.get('heal_containers')  # outside Home Assistant: {app: container} restarted through Docker
+    services.heal_containers = {str(k).strip(): str(v).strip() for k, v in asked.items()
+                                if str(k).strip() and str(v).strip()} if isinstance(asked, dict) else {}
     if note and read:
         note(f"settings.json: {len(order)} machines in order, {len(labels)} labels, {len(limits)} with their own limits, "
              f"{len(senders)} log senders, {len(networks)} address prefixes allowed")

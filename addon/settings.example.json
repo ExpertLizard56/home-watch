@@ -13,5 +13,6 @@
     "192.168.1.10": "nas"
   },
   "allowed_networks": ["192.168.1.", "127."],
-  "heal_script": "script.home_watch_heal_{app}"
+  "heal_script": "script.home_watch_heal_{app}",
+  "heal_containers": {"media_hub": "media-hub"}
 }
