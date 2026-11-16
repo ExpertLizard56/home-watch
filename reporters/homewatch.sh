@@ -78,9 +78,25 @@ if [ "$mount" = / ] && ! { echo ok > /var/tmp/.homewatch && rm -f /var/tmp/.home
   problems="\"drive-write\":\"The drive is refusing writes. It may be failing\""
 fi
 
+# Extra checks: every executable in /etc/homewatch.d (e.g. the router's AdGuard health) prints lines
+# "problem <key> <message>" (alerts) or "note <label>: <text>" (shown on the machine's page).
+notes=""
+for x in /etc/homewatch.d/*; do
+  [ -x "$x" ] || continue
+  # JSON-safe without escaping: backslashes dropped, double quotes become single, tabs spaces.
+  out=$("$x" 2>/dev/null | tr -d '\' | tr '"\t' "' " | awk '
+    $1 == "problem" && NF > 2 { k = $2; sub(/^problem +[^ ]+ +/, ""); p = p (p ? "," : "") "\"" k "\":\"" $0 "\"" }
+    $1 == "note" && index($0, ": ") { sub(/^note +/, ""); i = index($0, ": ")
+      n = n (n ? "," : "") "\"" substr($0, 1, i - 1) "\":\"" substr($0, i + 2) "\"" }
+    END { print p; print n }')
+  p=$(echo "$out" | sed -n 1p); n=$(echo "$out" | sed -n 2p)
+  [ -n "$p" ] && problems="${problems:+$problems,}$p"
+  [ -n "$n" ] && notes="${notes:+$notes,}$n"
+done
+
 body="{\"machine\":\"$MACHINE\",\"name\":\"$NAME\",\"kind\":\"linux\",\"cpu_ticks\":[$cpu],
 \"metrics\":{$mem,\"load\":$load,\"uptime_h\":$up${temp:+,\"temp\":$temp},$space$wifi$dtemp},
-\"counters\":{$disk,$net},\"procs\":[$procs],\"problems\":{$problems}}"
+\"counters\":{$disk,$net},\"procs\":[$procs],\"problems\":{$problems},\"notes\":{$notes}}"
 
 if [ -n "$HOMEWATCH_DRY" ]; then
   echo "$body"

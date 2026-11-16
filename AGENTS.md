@@ -285,6 +285,8 @@ Outside Home Assistant two things must fail, and that is expected: the hub's own
 Supervisor kernel log), and any check whose host does not answer (`ping` on Windows, or a made-up address). Both are
 logged and skipped; the rest of the add-on must still work. A reporter can also be run by hand without a hub:
 `HOMEWATCH_DRY=1 ./homewatch.sh test "Test"` and `powershell -File pc.ps1 -Dry` print what they would send.
+`homewatch.sh` also runs every executable in `/etc/homewatch.d` and sends its lines: `problem <key> <message>`
+(alerts) and `note <label>: <text>` (the machine's page). The router has `adguard` there (AdGuard's lists and lookups, Nov 15).
 
 ## Checks before a commit
 
