@@ -40,8 +40,7 @@ It opens from the sidebar as **Home watch**, or at `http://<your-home-assistant>
 On the add-on's **Info** tab, turn on **Watchdog** (Home Assistant restarts Home Watch if it hangs or crashes) and, if
 you want it, **Auto update**.
 
-Home Assistant builds it on the machine it runs on. It fits `aarch64` (64-bit Raspberry Pi), `amd64` (PCs and VMs) and
-`armv7`.
+Home Assistant builds it on the machine it runs on. It fits `aarch64` (64-bit Raspberry Pi) and `amd64` (PCs and VMs).
 
 ## First run
 

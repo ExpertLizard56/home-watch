@@ -1,23 +1,18 @@
 name: Home watch
-version: "0.18.0"
+version: "0.18.1"
 slug: home_watch
 description: Keeps an eye on every machine at home (health, history, drive and SD card trouble) and tells your phone through Home Assistant when something's wrong.
 url: https://github.com/ExpertLizard56/home-watch
-# The base image (python:3.13-alpine) is published for every one of these, so no build.yaml is needed and the Pi's
-# aarch64 build is unchanged.
+# The base image (python:3.13-alpine) is published for both, so no build.yaml is needed. Home Assistant dropped armv7
+# in 2025.12.
 arch:
   - aarch64
   - amd64
-  - armv7
-startup: application
-boot: auto
 init: false
 # Host networking, so the other machines can post their reports to port 8790 and open the page.
 host_network: true
 ingress: true
 ingress_port: 8790
-# With the watchdog on, Home Assistant restarts Home Watch if it stops answering here, not only if it exits.
-watchdog: http://[HOST]:8790/health
 panel_icon: mdi:shield-check
 panel_title: Home watch
 # History, state, log, the check list and settings.json are plain files in /share/home-watch; the phones' quiet file is

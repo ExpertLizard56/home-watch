@@ -11,8 +11,8 @@ it is MIT licensed.
 ## Layout
 
 `addon/` is the add-on: one container on `python:3.13-alpine`, which `addon/Dockerfile` starts as `python -u /watch.py`.
-That base image is published for aarch64, amd64 and armv7, which is why `config.yaml` can list all three without a
-`build.yaml`.
+That base image is published for aarch64 and amd64, which is why `config.yaml` can list both without a `build.yaml`
+(Home Assistant dropped armv7 in 2025.12).
 
 - `watch.py` — the hub: takes the reports, keeps each machine's state, runs the checks that need history (hot, disk
   full, memory or CPU high for an hour, silent), sends the alerts, serves the page and the JSON API the page calls.
@@ -26,8 +26,8 @@ That base image is published for aarch64, amd64 and armv7, which is why `config.
   page's Logs section downloads (a `.log` for one machine, a `.zip` of one each for several).
 - `page.html` — the page: one file, plain SVG, no libraries. Five views (everything, one machine, one check, the checks
   editor, the machines editor), routed by the URL fragment (`#<machine>`, `#check:<id>`, `#checks:`, `#machines:`).
-- `config.yaml` — the add-on's metadata and its few options (see version bumps), and its `watchdog`
-  (`http://[HOST]:8790/health`), which is how Home Assistant restarts a hung add-on. `settings.example.json` and
+- `config.yaml` — the add-on's metadata and its few options (see version bumps), and the
+  Dockerfile's `HEALTHCHECK` (`GET /health` on 8790) is how Home Assistant's watchdog restarts a hung add-on. `settings.example.json` and
   `monitors.json` are generic examples; `services.py` copies `monitors.json` into a data folder that has no check list
   yet, and never over one that is already there.
 - `reporters/` — what the other machines run: `pc.ps1` (Windows), `homewatch.sh` (Linux and OpenWrt/busybox) and
