@@ -9,7 +9,6 @@ import errno
 import glob
 import os
 import re
-import statistics
 import urllib.request
 
 import history
@@ -101,27 +100,10 @@ def emmc_wear(dev='mmcblk0'):
 
 
 def writes_a_lot():
-    """SD cards wear out from writing. Last 24 h against the usual day (median of the 7 before)."""
-    rows = history.read('pi', 8)
-    if not rows or rows[-1][0] - rows[0][0] < 3 * 86400:
-        return None
-    end = rows[-1][0]
-    days, counts = [0.0] * 8, [0] * 8
-    for t, r in rows:
-        i = int((end - t) // 86400)
-        if i < 8:
-            days[i] += history.num(r.get('disk_write_mb')) or 0
-            counts[i] += 1
-    # Only whole days count as usual (288 reports a day; 200+ = whole enough): with a few days of history the empty
-    # days made the median 1 MB, and an ordinary 8.7 GB day was called "8662x the usual".
-    whole = [d for d, n in zip(days[1:], counts[1:], strict=True) if n >= 200]
-    if len(whole) < 3:
-        return None
-    usual = statistics.median(whole)
-    today = days[0] / 1000
-    if today > LIMITS['writes_gb'] and days[0] > 3 * usual:
-        times = days[0] / max(usual, 1)
-        return f"The SD card wrote {today:.1f} GB in the last day, about {times:.0f}x the usual. Something is writing a lot"
+    """SD cards wear out from writing. Last 24 h against the usual day (history.writes_jump)."""
+    jump = history.writes_jump('pi', LIMITS['writes_gb'])
+    if jump:
+        return f"The SD card wrote {jump[0]:.1f} GB in the last day, about {jump[1]:.0f}x the usual. Something is writing a lot"
     return None
 
 

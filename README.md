@@ -188,6 +188,24 @@ the script if you want another name. It also does the PC's own drive checks: dri
 disk errors in Windows' log and errors the drive itself couldn't correct. `powershell -File pc.ps1 -Dry` prints what it would send instead of sending it. If the
 hub stops taking reports for 30 minutes, the PC shows a Windows notice of its own.
 
+**Things that must be running.** Put a `checks.json` in `%LOCALAPPDATA%\Home watch\` of the account the task runs
+as (or pass `-Checks <path>`); each entry that fails becomes an alert `down-<name>`. A missing file means no checks.
+
+```json
+[
+  {"name": "SSH server", "service": "sshd"},
+  {"name": "HDR switcher", "process": "AutoActions"},
+  {"name": "GPU undervolt", "task": "GPU undervolt cap", "after": "MSIAfterburner"},
+  {"name": "Dashboard", "url": "http://127.0.0.1:3000/"},
+  {"name": "File share", "share": "Shared", "path": "C:\\Shared"},
+  {"name": ".ssh permissions", "folder": "C:\\Users\\me\\.ssh", "only": ["SYSTEM", "Administrators", "me"]}
+]
+```
+
+Each entry has a `name` and one of `service`, `process`, `task`, `url`, `share` or `folder`. `task` = it ran since sign-in and ended well (and after the `after` process started, if given); `folder` = nobody
+outside `only` has any access to it. Services, URLs and shares get 10 minutes after boot, processes and tasks 10
+minutes after sign-in, before they count as down.
+
 ### Linux and OpenWrt: `reporters/homewatch.sh`
 
 ```sh

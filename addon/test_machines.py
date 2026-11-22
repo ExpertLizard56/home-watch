@@ -15,6 +15,7 @@ import unittest
 import urllib.error
 import urllib.request
 from http.server import ThreadingHTTPServer
+from unittest import mock
 
 DATA = tempfile.mkdtemp(prefix='home-watch-machines-test-')
 os.environ['HOME_WATCH_DATA'] = DATA
@@ -356,3 +357,29 @@ if __name__ == '__main__':
 
 
 
+
+
+class WritesJump(unittest.TestCase):
+    """A day of writes far over the usual day (median of the whole days before) is a problem; a busy but usual day isn't."""
+
+    def rows(self, per_day_mb, today_mb):
+        end = 10 * 86400.0
+        out = []
+        for d, mb in enumerate(per_day_mb, start=1):               # day d back: 288 reports of 5 minutes
+            out += [(end - d * 86400 - i * 300, {'disk_write_mb': mb / 288}) for i in range(288)]
+        out += [(end - i * 300, {'disk_write_mb': today_mb / 288}) for i in range(288)]
+        return sorted(out)
+
+    def test_a_big_jump_is_found_and_a_usual_day_is_not(self):
+        with mock.patch.object(history, 'read', return_value=self.rows([10000] * 7, 60000)):
+            gb, times = history.writes_jump('pc', 20)
+        self.assertAlmostEqual(gb, 60, places=0)
+        self.assertAlmostEqual(times, 6, places=0)
+        with mock.patch.object(history, 'read', return_value=self.rows([10000] * 7, 25000)):
+            self.assertIsNone(history.writes_jump('pc', 20))      # over the floor, but not 3x the usual
+        with mock.patch.object(history, 'read', return_value=self.rows([1000] * 7, 15000)):
+            self.assertIsNone(history.writes_jump('pc', 20))      # 15x, but under the floor
+
+    def test_too_little_history_says_nothing(self):
+        with mock.patch.object(history, 'read', return_value=self.rows([10000] * 2, 90000)):
+            self.assertIsNone(history.writes_jump('pc', 20))

@@ -260,14 +260,18 @@ Who checks what, and why:
 - **The reporter** checks what only it can see: on Windows, drive health, any drive under 10% free, disk errors in
   Windows' own log in the last 2 hours and any error the drive itself couldn't correct or a drive warning about itself (an NVMe drive's own health log, else
   Windows' reliability counters); on Linux, space and a drive that refuses a write. Those arrive as `problems`.
+  The PC reporter also checks the house's must-be-running list, `checks.json` (README; never in this repo, it's
+  the house's own), as `down-<name>` problems, and an unreadable list as `checks-file`.
 - **The hub's own report** (`pi.py`) checks the card it lives on: under 5 GB free, kernel card messages since boot
   (an SD card has no SMART, so this is the main sign of one wearing out), a card refusing writes, eMMC wear where the
   card reports it, and a day's writes against the median of the whole days before it (2 GB and 3x the usual before it
-  is called a lot — only whole days count, or a short history makes an ordinary day look enormous).
+  is called a lot — only whole days count, or a short history makes an ordinary day look enormous;
+  `history.writes_jump`).
 - **The hub** checks what needs history: a machine with no report for `silent_hours`, memory over its limit for an
   hour, CPU over its limit for an hour (the alert names the busiest programs from that machine's last report), and the
   generic disk-space check — which it skips for `kind` `pi` and `windows`, since those two check their own drives
-  properly.
+  properly — and, for `windows` machines, the same day's-writes test as the card's (`WRITES_GB` 20 GB and 3x,
+  worked out hourly), as `<machine>-writes`. A house's own updater can act on it (roll back recent updates).
 - **The service checks** check everything outside: see above.
 
 ## Try a change locally

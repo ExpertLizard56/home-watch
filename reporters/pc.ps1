@@ -1,11 +1,12 @@
 # Home watch reporter for a Windows PC. A scheduled task (e.g. "Home watch report") runs it every 5 minutes, hidden,
 # through conhost --headless. It sends raw counters to the hub, which works out amounts from the change between
 # reports (Beszel's way, MIT; see addon/watch.py), plus the drive checks: drive health, low space and disk errors in
-# Windows' log. If the hub stops taking reports for 30 minutes, it shows a Windows notice (phone alerts come from it).
+# Windows' log, and the things listed in checks.json that must be running. If the hub stops taking reports for 30
+# minutes, it shows a Windows notice (phone alerts come from it).
 # -Dry prints the report instead of sending it.
 # The hub's address comes from -Hub (or HOMEWATCH_HUB): there is no default, so it says so and stops if it is missing.
 
-param([switch]$Dry, [string]$Hub)
+param([switch]$Dry, [string]$Hub, [string]$Checks)
 
 $hub   = if ($Hub) { $Hub } else { $env:HOMEWATCH_HUB }
 $local = Join-Path $env:LOCALAPPDATA 'Home watch'
@@ -102,6 +103,58 @@ foreach ($d in @(Get-PhysicalDisk)) {
 }
 if ($temps.Count) { $metrics.drive_temp = ($temps | Measure-Object -Maximum).Maximum }
 if ($wear.Count) { $metrics.drive_wear = ($wear | Measure-Object -Maximum).Maximum }  # the hub's drive_wear limit decides
+
+# Things that must be running: a list of checks in checks.json (-Checks, else "Home watch\checks.json" in the user's
+# local app data; no file = no checks). Each is {"name": ..., and one of:}
+#   "service": "<name>"                       the Windows service is running
+#   "process": "<name>"                       a process by that name is running (signed-in things)
+#   "task": "<name>", "after": "<process>"    the scheduled task ran since sign-in and ended with 0 (and, with
+#                                             "after", ran after that process last started, for a setting it overwrites)
+#   "url": "<http address>"                   it answers
+#   "share": "<name>", "path": "<folder>"     the file share is there (and points at that folder)
+#   "folder": "<path>", "only": [accounts]    nobody but those accounts is on the folder's permissions
+# Each failing one is a problem "down-<name>". Sign-in things get 10 minutes after sign-in to start.
+$checksFile = if ($Checks) { $Checks } else { Join-Path $local 'checks.json' }
+if (Test-Path $checksFile) {
+    $signIn = (Get-Process explorer -ErrorAction SilentlyContinue | Sort-Object StartTime | Select-Object -First 1).StartTime
+    $settled = $signIn -and ((Get-Date) - $signIn).TotalMinutes -ge 10
+    $booted = ((Get-Date) - $os.LastBootUpTime).TotalMinutes -ge 10
+    try { $list = Get-Content $checksFile -Raw -Encoding UTF8 | ConvertFrom-Json; $list = @($list) } catch { $list = @(); $problems['checks-file'] = "checks.json can't be read: $($_.Exception.Message)" }
+    foreach ($k in $list) {
+        $why = $null
+        try {
+            if ($k.service) {
+                if (-not $booted) { continue }
+                $s = Get-Service $k.service -ErrorAction SilentlyContinue
+                if (-not $s) { $why = 'service missing' } elseif ($s.Status -ne 'Running') { $why = "service $($s.Status)" }
+            } elseif ($k.process) {
+                if (-not $settled) { continue }
+                if (-not (Get-Process $k.process -ErrorAction SilentlyContinue)) { $why = 'not running' }
+            } elseif ($k.task) {
+                if (-not $settled) { continue }
+                $i = Get-ScheduledTaskInfo -TaskName $k.task -ErrorAction SilentlyContinue
+                $after = if ($k.after) { Get-Process $k.after -ErrorAction SilentlyContinue | Sort-Object StartTime -Descending | Select-Object -First 1 }
+                if (-not $i) { $why = 'its task is missing' }
+                elseif ($i.LastRunTime -lt $signIn) { $why = "its task didn't run after sign-in" }
+                elseif ($after -and $after.StartTime -gt $i.LastRunTime) { $why = "$($k.after) started after its task ran" }
+                elseif ($i.LastTaskResult -ne 0 -and $i.LastTaskResult -ne 267009) { $why = "its task ended with code $($i.LastTaskResult)" }
+            } elseif ($k.url) {
+                if (-not $booted) { continue }
+                try { [void](Invoke-WebRequest $k.url -UseBasicParsing -TimeoutSec 15) } catch { $why = "not answering ($($_.Exception.Message))" }
+            } elseif ($k.share) {
+                if (-not $booted) { continue }
+                $sh = Get-SmbShare -Name $k.share -ErrorAction SilentlyContinue
+                if (-not $sh) { $why = 'the share is gone (or file sharing is off)' }
+                elseif ($k.path -and $sh.Path -ne $k.path) { $why = "the share points at $($sh.Path)" }
+            } elseif ($k.folder) {
+                $who = @((Get-Acl $k.folder -ErrorAction Stop).Access | ForEach-Object { "$($_.IdentityReference)" } | Select-Object -Unique)
+                $other = @($who | Where-Object { $w = $_; -not (@($k.only) | Where-Object { $w -eq $_ -or $w -like "*\$_" }) })
+                if ($other.Count) { $why = "also has $($other -join ', ') on it" }
+            }
+        } catch { $why = "couldn't check: $($_.Exception.Message)" }
+        if ($why) { $problems["down-$($k.name)"] = "$($k.name): $why" }
+    }
+}
 
 $report = [ordered]@{
     machine = 'pc'; name = 'This PC'; kind = 'windows'

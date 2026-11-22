@@ -63,11 +63,14 @@ LIMITS = {
     'drive_temp': 70,        # C, the drive's own sensor, all the time for 15 minutes
     'drive_wear': 70,        # % of the drive's rated life used (the PC reporter sends it)
 }
+WRITES_GB = 20      # a Windows PC's day of writes over this and 3x its usual day = something is writing a lot
+WRITES_EVERY = 3600  # seconds between working that out (it reads 8 days of history)
 DRIVE_HOT_FOR = 900  # seconds over drive_temp before it's a problem (a big copy warms a drive for a minute or two)
 # Address prefixes allowed to post reports and to open the page: the private ranges and Home Assistant's ingress.
 DEFAULT_NETWORKS = ('10.', '127.', '192.168.', *(f'172.{n}.' for n in range(16, 32)), '172.30.32.')
 
 lock = threading.Lock()
+writes_seen = {}         # machine id -> (when worked out, history.writes_jump's answer)
 state = {'machines': {}, 'sent': {}, 'raw': {}}
 options = {}
 order = []               # machine ids in the order settings.json lists them, which is the order the page shows
@@ -471,8 +474,28 @@ def machine_report(machine):
 
 # ---- checks and alerts --------------------------------------------------------------------------------------------
 
+def writes_jumps(now):
+    """A Windows machine's last day of writes against its usual day, worked out once an hour (history.writes_jump)."""
+    with lock:
+        pcs = [mid for mid, m in state['machines'].items() if m.get('kind') == 'windows']
+    out = {}
+    for mid in pcs:
+        when, jump = writes_seen.get(mid, (0, None))
+        if now - when >= WRITES_EVERY:
+            try:
+                jump = history.writes_jump(mid, WRITES_GB)
+            except Exception as e:
+                note(f"writes check for {mid} failed: {e!r}")
+                jump = None
+            writes_seen[mid] = (now, jump)
+        if jump:
+            out[mid] = jump
+    return out
+
+
 def current_problems():
     now = time.time()
+    jumps = writes_jumps(now)
     silent_after = float(options.get('silent_hours', 6)) * 3600
     out = {}
     with lock:
@@ -500,6 +523,10 @@ def current_problems():
             if since and now - since >= DRIVE_HOT_FOR:
                 out[f'{machine}-drive-hot'] = (name, (f"Drive is running hot: {mt.get('drive_temp', 0):.0f} C for "
                                                       f"{(now - since) / 60:.0f} minutes"))
+            if machine in jumps:
+                gb, times = jumps[machine]
+                out[f'{machine}-writes'] = (name, (f"Wrote {gb:.0f} GB to its drives in the last day, about {times:.0f}x the "
+                                                   "usual. Something is writing a lot (a new update or driver?)"))
             wear = mt.get('drive_wear')
             if wear is not None and wear >= limit_for(machine, 'drive_wear'):
                 out[f'{machine}-drive-wear'] = (name, f"Drive says {wear:.0f}% of its life is used. Plan a replacement.")

@@ -58,6 +58,32 @@ def read(machine, days):
     return rows
 
 
+def writes_jump(machine, floor_gb, times=3):
+    """The last 24 h of writes against the usual day (median of the whole days in the 7 before).
+
+    (gb, times_usual) when the last day wrote over floor_gb and over `times` the usual, else None. Only whole days count
+    as usual (288 reports a day; 200+ = whole enough): with a few days of history the empty days made the median 1 MB,
+    and an ordinary 8.7 GB day was called "8662x the usual". Needs 3 whole days first.
+    """
+    rows = read(machine, 8)
+    if not rows or rows[-1][0] - rows[0][0] < 3 * 86400:
+        return None
+    end = rows[-1][0]
+    days, counts = [0.0] * 8, [0] * 8
+    for t, r in rows:
+        i = int((end - t) // 86400)
+        if i < 8:
+            days[i] += num(r.get('disk_write_mb')) or 0
+            counts[i] += 1
+    whole = [d for d, n in zip(days[1:], counts[1:], strict=True) if n >= 200]
+    if len(whole) < 3:
+        return None
+    usual = statistics.median(whole)
+    if days[0] / 1000 > floor_gb and days[0] > times * usual:
+        return days[0] / 1000, days[0] / max(usual, 1)
+    return None
+
+
 def points(machine, days, count=300):
     """Averages into about 300 points so a year draws as fast as a day."""
     rows = read(machine, days)
