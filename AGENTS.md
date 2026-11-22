@@ -301,7 +301,7 @@ logged and skipped; the rest of the add-on must still work. A reporter can also 
 - `lefthook.yml` runs on every commit: gitleaks (refuses a commit whose new lines hold a password, token or key — this
   repo is public) and ruff on the staged Python. A fresh checkout needs `lefthook install` once. A refused commit means
   fix what it printed; never skip it (`--no-verify`, `LEFTHOOK=0`).
-- `cd addon && python -m unittest test_alerts test_logs test_machines test_services test_health` — five test files:
+- `cd addon && python -m unittest test_alerts test_logs test_machines test_services test_health test_pi` — six test files (`test_pi`: the hub report's crash-loop check):
   `test_alerts` for the phone notices (the quiet file: a future time with a zone is quiet, while a past time, a
   missing file, bad text and a time without a zone are not; every `mobile_app_` service being a phone;
   the persistent notification still posted while quiet; and a failure logged rather than raised); `test_logs` for

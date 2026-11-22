@@ -7,11 +7,14 @@ how much it writes. eMMC wear is read the way Beszel does (agent/emmc_linux.go, 
 
 import errno
 import glob
+import json
 import os
 import re
+import time
 import urllib.request
 
 import history
+import services
 
 LIMITS = {
     'free_gb': 5,     # under 5 GB free on the hub's card is a problem
@@ -22,6 +25,9 @@ KMSG = '/dev/kmsg'
 KERNEL_LOGS = ('/host/logs/boots/0/identifiers/kernel', '/host/logs/identifiers/kernel')
 
 seen = {'card_errors': None}
+CRASH_WINDOW = 1800   # a container Docker restarted on its own this many times in 30 min is crash-looping
+CRASH_TIMES = 3
+restarts = {}         # container name -> [(time, Docker's RestartCount)], the last CRASH_WINDOW of them
 
 
 def read(path, default=''):
@@ -107,8 +113,49 @@ def writes_a_lot():
     return None
 
 
+def docker_get(path):
+    conn = services.DockerSocket(timeout=10)
+    try:
+        conn.request('GET', path)
+        resp = conn.getresponse()
+        body = resp.read()
+        if resp.status != 200:
+            raise RuntimeError(f'docker {resp.status}')
+        return json.loads(body)
+    finally:
+        conn.close()
+
+
+def crash_loops(now=None, get=docker_get):
+    """Containers that keep crashing: Docker's own restart policy brought them back CRASH_TIMES or more in the last
+    CRASH_WINDOW (RestartCount only counts those, not a restart asked for, and starts over when a container is made
+    again). {name: count}. Nothing without the Docker socket (as a Home Assistant add-on)."""
+    if get is docker_get and not os.path.exists(services.DOCKER_SOCKET):
+        return {}
+    now = time.time() if now is None else now
+    out, names = {}, set()
+    for c in get('/containers/json?all=1'):
+        name = (c.get('Names') or ['?'])[0].lstrip('/')
+        names.add(name)
+        count = int(get(f"/containers/{c['Id']}/json").get('RestartCount') or 0)
+        seen_here = [(t, n) for t, n in restarts.get(name, []) if now - t <= CRASH_WINDOW and n <= count]
+        seen_here.append((now, count))
+        restarts[name] = seen_here
+        rose = count - seen_here[0][1]
+        if rose >= CRASH_TIMES:
+            out[name] = rose
+    for gone in set(restarts) - names:
+        del restarts[gone]
+    return out
+
+
 def problems(note):
     out = {}
+    try:
+        for name, count in crash_loops().items():
+            out[f'crash-{name}'] = f"{name} keeps crashing: Docker restarted it {count} times in the last 30 minutes"
+    except Exception as e:  # the rest of the report still goes
+        note(f'container restart check failed: {e}')
     st = os.statvfs(history.DATA)
     free_gb = st.f_bavail * st.f_frsize / 1e9
     if free_gb < LIMITS['free_gb']:
