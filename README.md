@@ -13,7 +13,7 @@ account and nothing extra installed.
   it has been up, and the busiest programs on Linux machines.
 - A page for each machine and each check, with graphs for a day, a week, a month or a year, % up and its outages.
 - Short notes a reporter sends along with its report, shown on the machine's page (a backup's last run, for example).
-- Every check's last 24 hours as a strip, an hour per tick.
+- Every check's latest results as bars, one per check like Uptime Kuma's (yellow = failed, retries left).
 - A Logs section that downloads the system logs the machines sent in, and Home Watch's own: tick All or some machines,
   pick today, 3, 7, 14 days or everything kept, and get one `.log` back, or a `.zip` with one file per machine.
 - A notice at most once a day per problem; a problem that clears can alert again if it comes back.

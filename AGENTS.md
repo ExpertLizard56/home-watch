@@ -22,7 +22,7 @@ That base image is published for aarch64 and amd64, which is why `config.yaml` c
   containers that keep crashing.
   It reports itself as machine `pi`, kind `pi`.
 - `services.py` — the service checks from `monitors.json`: the checks themselves, their status and retry rules, the
-  event and per-check CSVs, uptime/strips/outages, the push codes and self-heal.
+  event and per-check CSVs, beats.json, uptime/bars/outages, the push codes and self-heal.
 - `trail.py` — the busiest programs every Linux report carries, the syslog lines machines send in, and the range the
   page's Logs section downloads (a `.log` for one machine, a `.zip` of one each for several).
 - `page.html` — the page: one file, plain SVG, no libraries. Five views (everything, one machine, one check, the checks
@@ -74,10 +74,12 @@ The metrics land in the history columns `history.COLUMNS`; a machine with none o
 Everything lives in `/share/home-watch` (`HOME_WATCH_DATA` moves it), as plain files:
 
 - `history/<machine> <year-month>.csv` — one row per report, 12 months kept per machine.
-- `services/<year-month>.csv` — one row per check state change (time, id, status, detail). Uptime, the hour strips
-  and the outage list are all worked out from these.
+- `services/<year-month>.csv` — one row per check state change (time, id, status, detail). Uptime and the outage list
+  are worked out from these.
 - `checks/<year-month>.csv` — one row per check every 5 minutes (id, checks passed, average response ms): the
   response-time graph. Both service folders keep 12 months.
+- `beats.json` — the page's bars, Uptime Kuma's heartbeat bar: each check's last 100 results ([time, state, detail,
+  ms]; up, pending = failed with retries left (yellow), down, off), written with the checks file every 5 minutes.
 - `programs/<machine> <year-month>.csv` — programs at 1% of the CPU or more, per report, 12 months.
 - `logs/<machine> <year-month>.log` — the syslog lines a machine sent in, 3 months.
 - `state.json` — the live state; written at every check and on SIGTERM, so an update or restart loses no report.
@@ -229,7 +231,7 @@ with no date keep the date of the line above them. One machine comes back as a `
 ### The page and its API
 
 `GET /` serves `page.html`; every other GET is one of `/api/status` (state, order, labels), `/api/services` (each
-check, its id, its uptime and its 24-hour strip), `/api/checks` (the Checks screen: every check as the form edits it,
+check, its id, its uptime and its bars, under the key `strips`), `/api/checks` (the Checks screen: every check as the form edits it,
 the groups, the machines and whether this request may change anything), `/api/machines` (the Machines screen: every
 machine with its shown name, its own limits and the generic ones), `/api/history?machine=&days=`,
 `/api/check?id=&days=`, `/api/outages?days=`, `/api/log?machine=`, `/api/logs` (the machines with saved syslog files,

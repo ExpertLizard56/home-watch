@@ -42,6 +42,8 @@ class Helpers(unittest.TestCase):
         services.REMOVED = os.path.join(self.folder, 'removed-ids.json')
         services.EVENTS = os.path.join(self.folder, 'services')
         services.CHECKS_DIR = os.path.join(self.folder, 'checks')
+        services.BEATS_FILE = os.path.join(self.folder, 'beats.json')
+        services.beats.clear()
         services.monitors[:] = []
         services.status.clear()
         services.pushes.clear()
@@ -440,6 +442,39 @@ class Checks(Helpers):
                 self.assertEqual(services.status[1]['detail'], 'Not on the network')
         self.assertEqual(services.status[1]['ms'], 3000)  # and the check's page shows the ping time
 
+
+    # ---- the page's bars: one per check result, as Uptime Kuma's heartbeat bar ----
+    def test_each_result_is_a_bar_pending_before_down(self):
+        self.write_list([{'name': 'Router', 'type': 'ping', 'host': '192.0.2.1', 'every': 60, 'retries': 1}])
+        services.load(self.note)
+        results = [(True, '', 5.0), (False, 'no answer', 0), (False, 'no answer', 0), (True, '', 6.0)]
+        with mock.patch.dict(services.CHECKS, ping=mock.Mock(side_effect=results)):
+            for _ in results:
+                services.run_one(services.monitors[0], {}, self.note)
+        bars = services.summary()[1][1]
+        self.assertEqual([b[1] for b in bars], ['up', 'pending', 'down', 'up'])
+        self.assertEqual(bars[2][2], 'no answer')
+        self.assertEqual(bars[3][3], 6)
+
+    def test_the_bars_keep_the_last_ones_and_survive_a_restart(self):
+        self.write_list([{'name': 'Router', 'type': 'ping', 'host': '192.0.2.1', 'every': 60}])
+        services.load(self.note)
+        with mock.patch.dict(services.CHECKS, ping=mock.Mock(return_value=(True, '', 1.0))):
+            for _ in range(services.BEATS + 5):
+                services.run_one(services.monitors[0], {}, self.note)
+        self.assertEqual(len(services.latest_beats()[1]), services.BEATS)
+        services.flush(time.time())
+        services.beats.clear()
+        services.load_beats(self.note)
+        self.assertEqual(len(services.latest_beats()[1]), services.BEATS)
+
+    def test_a_removed_check_loses_its_bars(self):
+        self.write_list([{'name': 'Router', 'type': 'ping', 'host': '192.0.2.1', 'every': 60}])
+        services.load(self.note)
+        with mock.patch.dict(services.CHECKS, ping=mock.Mock(return_value=(True, '', 1.0))):
+            services.run_one(services.monitors[0], {}, self.note)
+        services.remove_check(1, self.note)
+        self.assertEqual(services.latest_beats(), {})
 
     # ---- a note check: a note in one of the machine reports, read as plain substrings ----
 

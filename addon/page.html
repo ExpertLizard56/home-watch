@@ -6,7 +6,7 @@
 <title>Home watch</title>
 <!-- Five views: everything at a glance, one device's page (click its card or one of its checks), one check's page
      (click a check on a device's page, or one with no device), and the Checks and Machines screens that edit the add-on's
-     own lists. One card per machine is Beszel's layout (MIT); the hour-by-hour strip, 24 h / 30 day / year uptime and
+     own lists. One card per machine is Beszel's layout (MIT); the heartbeat bars, 24 h / 30 day / year uptime and
      outage list are Uptime Kuma's (MIT). Plain SVG, no libraries. -->
 <style>
 :root { --bg:#f6f7f9; --card:#fff; --text:#1d2330; --dim:#6b7280; --line:#e3e6eb; --ok:#1f9d55; --bad:#d64545; --warn:#c98a00;
@@ -112,7 +112,7 @@ pre.log { margin:0; font:12px/1.45 ui-monospace, Consolas, monospace; white-spac
   <div id="problems" class="problems none">Loading...</div>
   <h2 class="sec">Devices</h2>
   <div id="grid" class="grid"></div>
-  <h2 class="sec">Services <span class="when" style="font-weight:normal">(strip = last 24 hours, % = up in the last day)</span></h2>
+  <h2 class="sec">Services <span class="when" style="font-weight:normal">(bars = its latest checks, newest on the right; % = up in the last day)</span></h2>
   <div id="svc" class="svc"></div>
   <h2 class="sec">Outages, last 7 days</h2>
   <div class="panel" id="hout"></div>
@@ -144,7 +144,7 @@ pre.log { margin:0; font:12px/1.45 ui-monospace, Consolas, monospace; white-spac
   <div id="cstate" class="problems none"></div>
   <div class="facts panel" id="cfacts"></div>
   <h2 class="sec">Last 24 hours</h2>
-  <div class="panel"><div class="strip big" id="cstrip"></div><div class="striplabels"><span>24 h ago</span><span>12 h ago</span><span>now</span></div></div>
+  <div class="panel"><div class="strip big" id="cstrip"></div><div class="striplabels"><span id="cstripfrom"></span><span>now</span></div></div>
   <div class="split"><h2>Response time</h2>
     <div class="ranges"><button data-d="1" class="on">Day</button> <button data-d="7">Week</button> <button data-d="30">Month</button> <button data-d="365">Year</button></div>
   </div>
@@ -385,7 +385,17 @@ function dotOf(id) {
 }
 const checkDot = m => m.state === 'up' ? '' : m.state === 'down' ? 'bad' : m.state === 'pending' ? 'quiet' : 'wait';
 // A check's id is its identity (history, outages, push code); its name is only the label shown, so it can be renamed.
-const strip = id => '<span class="strip">' + (svc.strips[id] || Array(24).fill('')).map(s => '<i class="' + s + '"></i>').join('') + '</span>';
+// Uptime Kuma's heartbeat bar: one bar per check result [time, state, detail, ms], newest on the right, empty slots
+// on the left until there are enough; green up, yellow pending (failed, retries not used up), red down, grey off.
+const BEAT = {up: 'up', pending: 'part', down: 'down', off: 'off'};
+const beatTip = b => new Date(b[0] * 1000).toLocaleString([], {month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit'}) +
+  ': ' + b[1] + (b[2] ? ' (' + b[2] + ')' : '') + (b[1] === 'up' && b[3] ? ', ' + b[3] + ' ms' : '');
+const beats = (id, n) => {
+  const got = (svc.strips[id] || []).slice(-n);
+  return Array(n - got.length).fill('<i></i>').join('') +
+    got.map(b => '<i class="' + (BEAT[b[1]] || '') + '" title="' + esc(beatTip(b)) + '"></i>').join('');
+};
+const strip = id => '<span class="strip">' + beats(id, 30) + '</span>';
 
 // A check's row. On the main page a check that belongs to a device opens that device; anywhere else it opens the check.
 function serviceRow(m, toDevice) {
@@ -945,8 +955,9 @@ function check(id) {
     (dev ? '<div>Device<b><a href="#' + encodeURIComponent(m.machine) + '">' + esc(nameOf(m.machine)) + '</a></b></div>' : '') +
     // A push check's path, so it can be copied into whatever reports in (the code lives in push-codes.json on the hub).
     (m.push ? '<div style="grid-column:1/-1">Push path<b><code>' + esc(m.push) + '</code></b></div>' : '');
-  $('cstrip').innerHTML = (svc.strips[id] || Array(24).fill('')).map((s, i) =>
-    '<i class="' + s + '" title="' + (24 - i) + ' to ' + (23 - i) + ' h ago: ' + ({up: 'up', down: 'down', part: 'down part of the hour', off: 'off', '': 'no record'})[s] + '"></i>').join('');
+  $('cstrip').innerHTML = beats(id, 100);
+  const first = (svc.strips[id] || [])[0];
+  $('cstripfrom').textContent = first ? beatTip(first).split(': ')[0] : '';
   $('cout').innerHTML = outageTable(outs.filter(o => String(o.id) === id), false);
   charts(['check', id], 'api/check?id=' + encodeURIComponent(id), CHECK_CHARTS, 'ccharts');
 }

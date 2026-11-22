@@ -33,7 +33,9 @@ comparing the code with hmac.compare_digest, so a wrong code learns nothing from
 A check that fails is "pending" until it has failed `retries` more times in a row, then "down", or "off" for a monitor
 with "off_ok": true (a TV switched off at the wall: normal, grey on the page, not counted against its uptime).
 Changes go in /share/home-watch/services/<year-month>.csv (time, id, status, detail); from them come the uptime
-(24 h, 30 days, a year), the hour-by-hour strip and the outage list. Every 5 minutes each check's results go in
+(24 h, 30 days, a year) and the outage list. The page's bars are Uptime Kuma's heartbeat bar: one bar per check
+result (up, pending, down, off), the last BEATS of them per check, kept in /share/home-watch/beats.json (written with
+the checks file, so a restart keeps them). Every 5 minutes each check's results go in
 /share/home-watch/checks/<year-month>.csv (time, id, ok, checks, ms: its response times). Both kept 12 months.
 Monitors with "heal": true post a webhook message to Home Assistant's self-heal automation when they go down or come
 back, but only when the add-on's `self_heal` option is on. The message names the script that restarts the app
@@ -78,6 +80,8 @@ EVENTS = f'{DATA}/services'
 CHECKS_DIR = f'{DATA}/checks'
 KEEP_MONTHS = 12
 FLUSH = 300  # seconds between rows in the checks file
+BEATS_FILE = f'{DATA}/beats.json'
+BEATS = 100  # results kept per check for the page's bars
 HEALTH_STALE = 300  # seconds; older than this without a loop round and GET /health answers 503 (the watchdog restarts)
 DEFAULT_LIST = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'monitors.json')
 HEAL_SCRIPT = 'script.home_watch_heal_{app}'  # the Home Assistant script self-heal calls; {app} = the check's app
@@ -98,6 +102,7 @@ healed = {}  # {app: when its container was last restarted}
 HEAL_COOLDOWN = 900  # seconds between two restarts of one app, as the Home Assistant script's 15 min wait
 DOCKER_SOCKET = '/var/run/docker.sock'
 samples = {}  # check id -> [ok, checks, ms total, ms count] since the last row was written
+beats = {}  # check id -> its last BEATS results, oldest first: [time, state, detail, ms]
 cache = {}  # what summary() last worked out, and when
 last_round = time.time()  # when the check loop last began a round; health() reads it for the Supervisor's watchdog
 
@@ -584,6 +589,7 @@ def remove_check(cid, note=None):
         status.pop(cid, None)
         pushes.pop(cid, None)
         samples.pop(cid, None)
+        beats.pop(cid, None)
     remember_removed(cid)
     drop_history(cid)
     cache.clear()
@@ -813,6 +819,10 @@ def run_one(m, options, note):
             gone = 'off' if m.get('off_ok') else 'down'
             new = gone if s['fails'] > int(m.get('retries', 0)) else ('pending' if old != gone else gone)
         s['detail'] = detail if not ok else ''
+        if new != 'waiting':
+            row = beats.setdefault(cid, [])
+            row.append([round(now), new, s['detail'][:120], round(ms)])
+            del row[:-BEATS]
         if new == old:
             return
         s['state'], s['since'] = new, now
@@ -948,6 +958,7 @@ def health(now=None):
 def loop(options, note):
     global last_round
     load(note)
+    load_beats(note)
     note(f"service checks: {len(monitors)} monitors")
     pool = ThreadPoolExecutor(max_workers=16)
     flushed = tidied = time.time()
@@ -988,8 +999,35 @@ def snapshot():
     return out
 
 
+def load_beats(note):
+    """The bars as they were before a restart: beats.json, {"<check id>": [[time, state, detail, ms], ...]}. A
+    missing or broken file starts the bars empty."""
+    try:
+        with open(BEATS_FILE, encoding='utf-8') as f:
+            got = json.load(f)
+    except FileNotFoundError:
+        return
+    except (OSError, ValueError) as e:
+        note(f"beats.json not read, the bars start empty: {e}")
+        return
+    with lock:
+        for cid, row in got.items():
+            if str(cid).isdigit() and isinstance(row, list):
+                beats[int(cid)] = [b for b in row if isinstance(b, list) and len(b) == 4][-BEATS:]
+
+
+def latest_beats():
+    """Every check's bars, oldest first, for the page."""
+    with lock:
+        return {cid: [list(b) for b in row] for cid, row in beats.items() if cid in status}
+
+
 def flush(now):
-    """One row per check for the last 5 minutes: how many of its checks passed and its average response time."""
+    """One row per check for the last 5 minutes: how many of its checks passed and its average response time; and
+    the bars (beats.json), so a restart keeps them."""
+    with lock:
+        kept = {str(cid): row for cid, row in beats.items() if cid in status}
+    save(BEATS_FILE, json.dumps(kept, separators=(',', ':')))
     with lock:
         got = {cid: sample for cid, sample in samples.items() if cid in status}  # a removed check writes nothing
         samples.clear()
@@ -1052,27 +1090,20 @@ def spent(timeline, a, b):
 
 
 def summary():
-    """Uptime over 24 h, 30 days and a year, and a 24-tick strip (one per hour, oldest first) for every check.
-    Worked out at most every 30 seconds (every open page asks each minute)."""
+    """Uptime over 24 h, 30 days and a year for every check, and its bars (latest_beats). The uptime is worked out at
+    most every 30 seconds (every open page asks each minute); the bars are always the latest."""
     now = time.time()
-    if now - cache.get('at', 0) < 30:
-        return cache['uptime'], cache['strips']
-    uptime, strips = {}, {}
-    for cid, timeline in changes(366).items():
-        u = {}
-        for key, days in (('d1', 1), ('d30', 30), ('d365', 365)):
-            got = spent(timeline, now - days * 86400, now)
-            total = got['up'] + got['down']
-            u[key] = round(100 * got['up'] / total, 2) if total else None
-        uptime[cid] = u
-        ticks = []
-        for i in range(24):
-            got = spent(timeline, now - (24 - i) * 3600, now - (23 - i) * 3600)
-            ticks.append('part' if got['down'] and got['up'] else 'down' if got['down'] else 'up' if got['up']
-                         else 'off' if got['off'] else '')
-        strips[cid] = ticks
-    cache.update(at=now, uptime=uptime, strips=strips)
-    return uptime, strips
+    if now - cache.get('at', 0) >= 30:
+        uptime = {}
+        for cid, timeline in changes(366).items():
+            u = {}
+            for key, days in (('d1', 1), ('d30', 30), ('d365', 365)):
+                got = spent(timeline, now - days * 86400, now)
+                total = got['up'] + got['down']
+                u[key] = round(100 * got['up'] / total, 2) if total else None
+            uptime[cid] = u
+        cache.update(at=now, uptime=uptime)
+    return cache['uptime'], latest_beats()
 
 
 def label(cid):
