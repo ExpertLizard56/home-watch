@@ -258,7 +258,8 @@ normal for a PC), `drive_temp` 70 C for 15 minutes (`DRIVE_HOT_FOR`; a big copy 
 Who checks what, and why:
 
 - **The reporter** checks what only it can see: on Windows, drive health, any drive under 10% free, disk errors in
-  Windows' own log in the last 2 hours and any error the drive itself couldn't correct (its read/write counters); on Linux, space and a drive that refuses a write. Those arrive as `problems`.
+  Windows' own log in the last 2 hours and any error the drive itself couldn't correct or a drive warning about itself (an NVMe drive's own health log, else
+  Windows' reliability counters); on Linux, space and a drive that refuses a write. Those arrive as `problems`.
 - **The hub's own report** (`pi.py`) checks the card it lives on: under 5 GB free, kernel card messages since boot
   (an SD card has no SMART, so this is the main sign of one wearing out), a card refusing writes, eMMC wear where the
   card reports it, and a day's writes against the median of the whole days before it (2 GB and 3x the usual before it
