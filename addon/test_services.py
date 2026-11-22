@@ -359,6 +359,33 @@ class Checks(Helpers):
         self.assertFalse(ok)
         self.assertIn('expected 200', detail)
 
+    def test_http_text_must_be_on_the_page(self):
+        class Reply:
+            status = 200
+            def __init__(self, body):
+                self.body = body
+            def read(self, n=-1):
+                return self.body[:n]
+            def __enter__(self):
+                return self
+            def __exit__(self, *args):
+                return False
+        check = {'url': 'http://127.0.0.1:8081/node/state', 'good_text': 'leader'}
+        with mock.patch.object(services.urllib.request, 'urlopen', return_value=Reply(b'"leader"')):
+            self.assertEqual(services.check_http(check)[:2], (True, ''))
+        with mock.patch.object(services.urllib.request, 'urlopen', return_value=Reply(b'"disabled"')):
+            ok, detail, _ = services.check_http(check)
+        self.assertFalse(ok)
+        self.assertIn('disabled', detail)
+        with mock.patch.object(services.urllib.request, 'urlopen', return_value=Reply(b'leader, not answering')):
+            self.assertFalse(services.check_http(dict(check, bad_text='not answering'))[0])
+
+    def test_an_http_check_saves_its_text(self):
+        row, errors = services.save_check({'name': 'Thread', 'type': 'http', 'url': 'http://127.0.0.1:8081/node/state',
+                                           'good_text': 'leader'}, self.note)
+        self.assertEqual(errors, {})
+        self.assertEqual(row['good_text'], 'leader')
+
     # ---- a machine check: with no host it only watches the reports; with one it also pings the address ----
 
     def reported(self, ago, problems=None):

@@ -322,7 +322,7 @@ const TYPES = {ping: 'Answers pings', port: 'Port open', http: 'Web page answers
 // The Checks screen: every field a type reads, with its one-line hint, and the fields each type shows.
 const TYPE_LIST = [['ping', 'Ping'], ['port', 'TCP port'], ['http', 'Web page'], ['dns', 'DNS'],
   ['dyndns', 'Dynamic DNS'], ['machine', 'Machine reports in'], ['note', 'Note says the right thing'], ['push', 'Push (something reports in)']];
-const TYPE_FIELDS = {ping: ['host'], port: ['host', 'port'], http: ['url', 'expect'],
+const TYPE_FIELDS = {ping: ['host'], port: ['host', 'port'], http: ['url', 'expect', 'good_text', 'bad_text'],
   dns: ['name_to_look_up', 'server', 'port'], dyndns: ['hostname'], machine: ['machine', 'host', 'quiet'], note: ['machine', 'label', 'good_text', 'bad_text'], push: []};
 const TYPE_HINT = {
   ping: 'Pings an address; up when it answers.',
@@ -344,8 +344,8 @@ const FIELDS = {
   hostname: {label: 'Host name', hint: 'The dynamic-DNS name that should point at your public address.', placeholder: 'home.example.net'},
   machine: {label: 'Machine', hint: 'Pick a machine that has reported, or type an id for one that has not yet.', list: 'cmachinelist', placeholder: 'pc'},
   label: {label: 'Note label', hint: "The note's label, exactly as the machine sends it.", list: 'cnotelist', placeholder: 'Backup'},
-  good_text: {label: 'Text it should contain (optional)', hint: 'Plain text anywhere in the note, ignoring case.', placeholder: 'last run ok'},
-  bad_text: {label: 'Text it must not contain (optional)', hint: 'Plain text anywhere in the note, ignoring case. Checked before the good text.', placeholder: 'failed'},
+  good_text: {label: 'Text it should contain (optional)', hint: 'Plain text anywhere in the note or page, ignoring case.', placeholder: 'last run ok'},
+  bad_text: {label: 'Text it must not contain (optional)', hint: 'Plain text anywhere in the note or page, ignoring case. Checked before the good text.', placeholder: 'failed'},
   quiet: {label: 'Quiet time (seconds)', hint: 'How long it may go without a report before it is down. 900 = 15 minutes.', type: 'number', min: 60, max: 86400, placeholder: '900'},
 };
 const TYPE_DEFAULTS = {ping: {every: 60, retries: 2}, port: {every: 60, retries: 2}, http: {every: 60, retries: 2},

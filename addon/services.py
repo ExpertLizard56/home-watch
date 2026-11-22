@@ -5,7 +5,8 @@ no list in it yet gets the example list shipped in addon/monitors.json; a list t
 overwritten. The page's Checks screen validates a check, writes the list whole (a temp file, then a rename) and puts it
 in front of the running checks at once, so nothing needs a restart. Each check runs every `every` seconds:
 - ping: a device answers; port: a TCP port takes a connection; http: a page answers 200-299 (or the exact status in
-  `expect`); dns: a DNS server answers a name;
+  `expect`), and, when the check gives them, its text holds `good_text` and not `bad_text` (as a note check reads them,
+  over the first 64 KB of the page); dns: a DNS server answers a name;
 - push: something else reports in at /api/push/<code>?status=up&msg=..., and silence longer than `every` = down;
 - machine (Home watch's own): one of its machines reported within `quiet` seconds (15 min if not set) with no problem.
   A machine check may also name a `host`: each round it then pings that address the way a ping check does, and is down
@@ -386,6 +387,10 @@ def validate(raw, current=None):
             errors['expect'] = bad
         elif expect is not None:
             out['expect'] = expect
+        for key in ('good_text', 'bad_text'):
+            said = _text(raw, key, 200)
+            if said:
+                out[key] = said
     elif kind == 'dns':
         look = _text(raw, 'name_to_look_up', 200)
         if not look:
@@ -650,22 +655,43 @@ def check_port(m):
     return True, '', (time.time() - started) * 1000
 
 
+def text_says(m, text):
+    """'' when the text is what the check expects, or why not: it must not hold `bad_text` (looked for first, so "not
+    answering" can be bad while "answering" is good) and must hold `good_text`, both plain and ignoring case."""
+    low = text.lower()
+    bad = str(m.get('bad_text') or '').strip().lower()
+    if bad and bad in low:
+        return text.strip()[:120] or 'empty'
+    good = str(m.get('good_text') or '').strip().lower()
+    if good and good not in low:
+        return f"doesn't say {m['good_text'].strip()}: {text.strip()[:100] or 'empty'}"
+    return ''
+
+
 def check_http(m):
-    """The page answers: any 200-299, or the exact status in `expect` when the check names one."""
+    """The page answers: any 200-299, or the exact status in `expect` when the check names one; and when the check
+    gives `good_text` or `bad_text`, the page's text (its first 64 KB) says what text_says wants."""
     started = time.time()
     req = urllib.request.Request(m['url'], headers={'User-Agent': 'Home watch'})
+    body = b''
+    want_text = m.get('good_text') or m.get('bad_text')
     try:
         with urllib.request.urlopen(req, timeout=20) as r:
             code = r.status
+            if want_text:
+                body = r.read(65536)
     except urllib.error.HTTPError as e:
         code = e.code
     try:
         want = int(m['expect']) if m.get('expect') not in (None, '') else None
     except (TypeError, ValueError):
         want = None
+    ms = (time.time() - started) * 1000
     ok = code == want if want is not None else 200 <= code < 300
-    return ok, '' if ok else (f'answered {code}, expected {want}' if want is not None else f'answered {code}'), \
-        (time.time() - started) * 1000
+    if not ok:
+        return False, f'answered {code}, expected {want}' if want is not None else f'answered {code}', ms
+    why = text_says(m, body.decode('utf-8', 'replace')) if want_text else ''
+    return not why, why, ms
 
 
 def check_dns(m):
@@ -749,14 +775,7 @@ def check_note(m):
     if label not in notes:
         return False, f'No note called {label}', 0
     text = str(notes[label])
-    low = text.lower()
-    bad = str(m.get('bad_text') or '').strip().lower()
-    if bad and bad in low:
-        return False, text[:120], 0
-    good = str(m.get('good_text') or '').strip().lower()
-    if good and good not in low:
-        return False, text[:120], 0
-    return True, '', 0
+    return (False, text[:120], 0) if text_says(m, text) else (True, '', 0)
 
 
 CHECKS = {'ping': check_ping, 'port': check_port, 'http': check_http, 'dns': check_dns, 'dyndns': check_dyndns,

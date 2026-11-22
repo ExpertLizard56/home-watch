@@ -18,7 +18,8 @@ That base image is published for aarch64 and amd64, which is why `config.yaml` c
   full, memory or CPU high for an hour, silent), sends the alerts, serves the page and the JSON API the page calls.
 - `history.py` — the per-machine CSV history, and the averaged points a graph is drawn from.
 - `pi.py` — the hub's own report, since nothing else reports on the machine the add-on runs on: CPU, memory, swap,
-  load, temperature, the data drive's space, kernel card errors through the Supervisor, and how much the card writes.
+  load, temperature, the data drive's space, kernel card errors through the Supervisor, how much the card writes, and
+  containers that keep crashing.
   It reports itself as machine `pi`, kind `pi`.
 - `services.py` — the service checks from `monitors.json`: the checks themselves, their status and retry rules, the
   event and per-check CSVs, uptime/strips/outages, the push codes and self-heal.
@@ -117,7 +118,8 @@ never reused. Everything kept about a check is under that id — its state, hist
 nothing; changing or reusing its id would. Each check also has optional `group`, a `type`, `every` (seconds between
 runs), `retries` (failures in a row before it counts as down) and whatever its type needs:
 
-- `ping` (`host`), `port` (`host`, `port`), `http` (`url`, 200-299 counts), `dns` (`name_to_look_up`, `server`, `port`).
+- `ping` (`host`), `port` (`host`, `port`), `http` (`url`, 200-299 counts; optional `good_text`/`bad_text` the page's
+  first 64 KB must or must not hold, read the way a note check reads them), `dns` (`name_to_look_up`, `server`, `port`).
 - `dyndns` (`hostname`): asks a public IP-echo service for the network's real address and compares it with what the
   name resolves to. It never touches whatever updates the name. If the echo service itself fails, the check says up —
   a hiccup there must not be reported as a DNS problem.
@@ -266,7 +268,8 @@ Who checks what, and why:
   (an SD card has no SMART, so this is the main sign of one wearing out), a card refusing writes, eMMC wear where the
   card reports it, and a day's writes against the median of the whole days before it (2 GB and 3x the usual before it
   is called a lot — only whole days count, or a short history makes an ordinary day look enormous;
-  `history.writes_jump`).
+  `history.writes_jump`). On the Pi (Docker socket) it also flags a container Docker's restart policy brought back 3+
+  times in 30 minutes (`crash-<name>`, from RestartCount; a container made again starts over).
 - **The hub** checks what needs history: a machine with no report for `silent_hours`, memory over its limit for an
   hour, CPU over its limit for an hour (the alert names the busiest programs from that machine's last report), and the
   generic disk-space check — which it skips for `kind` `pi` and `windows`, since those two check their own drives
