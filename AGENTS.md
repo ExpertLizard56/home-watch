@@ -97,7 +97,7 @@ works.
 
 - `machines` — `{"<machine>": "<label>"}` or a plain `["<machine>", ...]`: the order the page shows machines in, and
   the names it shows them by. A machine that reports without being listed still shows, after the listed ones.
-- `limits` — `{"<machine>": {"temp": ..., "mem": ..., "disk_used_pct": ..., "cpu_busy": ...}}`: one machine's own
+- `limits` — `{"<machine>": {"temp": ..., "mem": ..., "disk_used_pct": ..., "cpu_busy": ..., "drive_temp": ..., "drive_wear": ...}}`: one machine's own
   numbers instead of the generic `LIMITS` in `watch.py`.
 - `log_senders` — `{"<ip>": "<machine>"}`: which address belongs to which machine, for the syslog trail.
 - `allowed_networks` — the address prefixes allowed to post reports and open the page (push calls skip it). Default: the private ranges and
@@ -167,7 +167,7 @@ suggests that machine's current note labels.
 
 `GET /api/machines` gives the page every machine that has reported and every one `settings.json` lists, in the page's
 order: its id, the name it shows, its own limits, the generic `LIMITS` (the form's hints) and whether the request may
-change anything. The changes are `POST /api/machines/save` (a shown name and the four limits), `/move` (by -1/+1) and
+change anything. The changes are `POST /api/machines/save` (a shown name and the six limits), `/move` (by -1/+1) and
 `/forget`, all refused (403) unless the request carries `X-Remote-User-Id`, the same rule as the Checks screen.
 `watch.validate_machine` checks the fields and returns field -> a sentence; `watch.save_machine` writes `settings.json`
 whole (a temp file, then a rename), keeping every other key in it, and reads it back at once, so the page, the limits
@@ -250,14 +250,15 @@ add-on's own port is read-only, and only the signed-in panel can change a check 
 
 ## The checks
 
-`LIMITS` in `watch.py` holds the generic numbers: `temp` 85 C, `mem` 95% for an hour, `disk_used_pct` 90%, and
+`LIMITS` in `watch.py` holds the generic numbers: `temp` 85 C, `mem` 95% for an hour, `disk_used_pct` 90%,
 `cpu_busy` off unless a machine asks for one in `settings.json` (it is off for everyone else because a busy CPU is
-normal for a PC). A machine's own numbers in `settings.json` replace those.
+normal for a PC), `drive_temp` 70 C for 15 minutes (`DRIVE_HOT_FOR`; a big copy warms a drive for a minute or two) and
+`drive_wear` 70% of the drive's rated life (early enough to buy a replacement; the PC reporter sends the number). A machine's own numbers in `settings.json` replace those.
 
 Who checks what, and why:
 
-- **The reporter** checks what only it can see: on Windows, drive health, any drive under 10% free and disk errors in
-  Windows' own log in the last 2 hours; on Linux, space and a drive that refuses a write. Those arrive as `problems`.
+- **The reporter** checks what only it can see: on Windows, drive health, any drive under 10% free, disk errors in
+  Windows' own log in the last 2 hours and any error the drive itself couldn't correct (its read/write counters); on Linux, space and a drive that refuses a write. Those arrive as `problems`.
 - **The hub's own report** (`pi.py`) checks the card it lives on: under 5 GB free, kernel card messages since boot
   (an SD card has no SMART, so this is the main sign of one wearing out), a card refusing writes, eMMC wear where the
   card reports it, and a day's writes against the median of the whole days before it (2 GB and 3x the usual before it

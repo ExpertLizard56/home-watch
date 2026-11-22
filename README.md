@@ -74,7 +74,8 @@ writes it for you; every key is optional, so a missing file is normal, and editi
 ```
 
 - `machines` is the order the page shows them in, with the names it shows them by.
-- `limits` gives one machine its own `temp`, `mem`, `disk_used_pct` or `cpu_busy` instead of the generic number.
+- `limits` gives one machine its own `temp`, `mem`, `disk_used_pct`, `cpu_busy`, `drive_temp` (70 C for 15 minutes) or
+  `drive_wear` (70% of its life used) instead of the generic number.
 - `log_senders` says which IP belongs to which machine, for the system-log trail (machines send their syslog to UDP
   5514).
 - `allowed_networks` lists the address prefixes allowed to post reports and open the page. Push checks don't use it:
@@ -154,7 +155,7 @@ Open **Machines** on the page (next to **Checks**). It lists every machine that 
 `settings.json` lists, in the order the page shows:
 
 - move a machine up or down, or edit it to change the name the page calls it and its own `temp`, `mem`,
-  `disk_used_pct` or `cpu_busy` limit. A blank limit means the generic one, shown under the field;
+  `disk_used_pct`, `cpu_busy`, `drive_temp` or `drive_wear` limit. A blank limit means the generic one, shown under the field;
 - forget a machine: it asks first, then drops its stored history, programs and logs and its entry in `settings.json`.
   A machine that keeps reporting shows up again, with no history;
 - saving writes `settings.json` at once (every other key in it is kept), so the page and the alerts use the new name
@@ -184,7 +185,7 @@ Running it as `SYSTEM` means no password is stored, and it is what lets the scri
 as a normal user those two numbers stay empty and everything else still works. It reports as machine `pc`, name
 `This PC`; edit those two lines in
 the script if you want another name. It also does the PC's own drive checks: drive health, any drive under 10% free,
-and disk errors in Windows' log. `powershell -File pc.ps1 -Dry` prints what it would send instead of sending it. If the
+disk errors in Windows' log and errors the drive itself couldn't correct. `powershell -File pc.ps1 -Dry` prints what it would send instead of sending it. If the
 hub stops taking reports for 30 minutes, the PC shows a Windows notice of its own.
 
 ### Linux and OpenWrt: `reporters/homewatch.sh`

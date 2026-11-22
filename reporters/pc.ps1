@@ -57,8 +57,11 @@ try {
     $rel = Get-PhysicalDisk | Get-StorageReliabilityCounter -ErrorAction Stop
     $temps = @($rel | Where-Object Temperature -gt 0 | ForEach-Object Temperature)
     if ($temps) { $metrics.drive_temp = ($temps | Measure-Object -Maximum).Maximum }
+    $wear = @($rel | Where-Object { $null -ne $_.Wear } | ForEach-Object Wear)
+    if ($wear) { $metrics.drive_wear = ($wear | Measure-Object -Maximum).Maximum }  # the hub's drive_wear limit decides
     foreach ($r in $rel) {
-        if ($r.Wear -ge 90) { $problems["wear-$($r.DeviceId)"] = "Drive $($r.DeviceId) says $($r.Wear)% of its life is used" }
+        $bad = [long]$r.ReadErrorsUncorrected + [long]$r.WriteErrorsUncorrected
+        if ($bad -gt 0) { $problems["drive-errors-$($r.DeviceId)"] = "Drive $($r.DeviceId) has $bad errors it couldn't correct (read $($r.ReadErrorsUncorrected), write $($r.WriteErrorsUncorrected)). Back it up." }
     }
 } catch { }
 

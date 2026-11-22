@@ -230,6 +230,37 @@ class Notes(Helpers):
         self.assertEqual(watch.current_problems(), {})
 
 
+class DriveChecks(Helpers):
+    """The drive's own numbers: a temperature counts only after DRIVE_HOT_FOR over the limit, wear as soon as it's at
+    the limit, and both follow a machine's own limits."""
+
+    def test_a_hot_drive_is_a_problem_only_after_it_stays_hot(self):
+        watch.take_report({'machine': 'pc', 'metrics': {'drive_temp': 75}})
+        self.assertEqual(watch.current_problems(), {})                       # just warmed up: not yet
+        watch.state['machines']['pc']['drive_hot_since'] -= watch.DRIVE_HOT_FOR
+        self.assertIn('pc-drive-hot', watch.current_problems())
+        watch.take_report({'machine': 'pc', 'metrics': {'drive_temp': 50}})  # cooled down: the clock starts over
+        self.assertNotIn('drive_hot_since', watch.state['machines']['pc'])
+        self.assertEqual(watch.current_problems(), {})
+
+    def test_wear_at_the_limit_is_a_problem_and_a_machine_may_move_the_limit(self):
+        watch.take_report({'machine': 'pc', 'metrics': {'drive_wear': 69}})
+        self.assertEqual(watch.current_problems(), {})
+        watch.take_report({'machine': 'pc', 'metrics': {'drive_wear': 70}})
+        self.assertIn('70% of its life', watch.current_problems()['pc-drive-wear'][1])
+        watch.limits = {'pc': {'drive_wear': 90, 'drive_temp': 80}}
+        self.assertEqual(watch.current_problems(), {})
+        watch.take_report({'machine': 'pc', 'metrics': {'drive_wear': 70, 'drive_temp': 75}})
+        self.assertNotIn('drive_hot_since', watch.state['machines']['pc'])
+
+    def test_the_drive_limits_are_on_the_machines_form(self):
+        with open(watch.PAGE, encoding='utf-8') as f:
+            page = f.read()
+        for key in ('drive_temp', 'drive_wear'):
+            self.assertIn(key, watch.MACHINE_LIMITS)
+            self.assertIn(f'id="mf_{key}"', page)
+
+
 class Api(Helpers):
     """The Machines screen's doors: anyone allowed may look, but only Home Assistant's ingress (a signed-in panel
     request, which the Supervisor marks with X-Remote-User-Id) may change anything."""

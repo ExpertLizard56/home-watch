@@ -275,8 +275,18 @@ pre.log { margin:0; font:12px/1.45 ui-monospace, Consolas, monospace; white-spac
           <span class="hint" id="mh_cpu_busy"></span>
           <span class="err" id="me_cpu_busy"></span>
         </label>
+        <label id="ml_drive_temp">Drive temperature limit (C)
+          <input type="number" id="mf_drive_temp" min="1" max="150" step="any">
+          <span class="hint" id="mh_drive_temp"></span>
+          <span class="err" id="me_drive_temp"></span>
+        </label>
+        <label id="ml_drive_wear">Drive wear limit (% of its life used)
+          <input type="number" id="mf_drive_wear" min="1" max="100" step="any">
+          <span class="hint" id="mh_drive_wear"></span>
+          <span class="err" id="me_drive_wear"></span>
+        </label>
       </div>
-      <span class="hint">Leave a limit blank to use the default. Memory and CPU count only when over the limit for an hour.</span>
+      <span class="hint">Leave a limit blank to use the default. Memory and CPU count only when over the limit for an hour, drive temperature for 15 minutes.</span>
       <div class="formbar"><button type="submit" class="primary" id="msave">Save machine</button>
         <button type="button" id="mcancel">Cancel</button></div>
     </form>
@@ -304,7 +314,7 @@ const CHECK_CHARTS = [['Response time', 'ms', [['ms', 'Average']]], ['Checks pas
 const FACTS = [
   ['cpu', 'CPU', '%'], ['mem', 'Memory used', '%'], ['swap', 'Swap used', '%'], ['load', 'Load', ''],
   ['temp', 'Temperature', ' C'], ['gpu_temp', 'Graphics temp', ' C'], ['gpu_use', 'Graphics busy', '%'],
-  ['gpu_power', 'Graphics power', ' W'], ['drive_temp', 'Drive temp', ' C'], ['disk_used_pct', 'Space used', '%'],
+  ['gpu_power', 'Graphics power', ' W'], ['drive_temp', 'Drive temp', ' C'], ['drive_wear', 'Drive wear', '%'], ['disk_used_pct', 'Space used', '%'],
   ['disk_free_gb', 'Space free', ' GB'], ['disk_write_mb', 'Written, last 5 min', ' MB'], ['disk_read_mb', 'Read, last 5 min', ' MB'],
   ['net_rx_mb', 'Network in, 5 min', ' MB'], ['net_tx_mb', 'Network out, 5 min', ' MB'], ['wifi_clients', 'Wi-Fi devices', ''],
 ];
@@ -726,7 +736,8 @@ async function newCode() {
 // Every machine that has reported and every one settings.json lists, in the page's order. Saving writes settings.json
 // on the hub (every other key in it is kept) and the hub picks it up at once; forgetting drops a machine's stored data.
 const LIMIT_FIELDS = [['temp', 'temp', ' C', 150], ['mem', 'memory', '%', 100],
-  ['disk_used_pct', 'disk', '%', 100], ['cpu_busy', 'CPU', '%', 100]];
+  ['disk_used_pct', 'disk', '%', 100], ['cpu_busy', 'CPU', '%', 100],
+  ['drive_temp', 'drive temp', ' C', 150], ['drive_wear', 'drive wear', '%', 100]];
 
 function machinesView() {
   if (machEditing) return;
@@ -757,7 +768,7 @@ function mmessage(text, bad) {
 
 const defaultHint = key => {
   const v = mach && mach.defaults ? mach.defaults[key] : null;
-  return 'Default: ' + (v == null ? 'off' : v + (key === 'temp' ? ' C' : '%'));
+  return 'Default: ' + (v == null ? 'off' : v + (LIMIT_FIELDS.find(f => f[0] === key) || [, , '%'])[2]);
 };
 const limitsLine = m => Object.entries(m.limits || {}).map(([key, v]) => {
   const f = LIMIT_FIELDS.find(x => x[0] === key);

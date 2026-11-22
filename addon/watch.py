@@ -60,7 +60,10 @@ LIMITS = {
     'mem': 95,               # % used, all the time for an hour
     'disk_used_pct': 90,     # the PC reporter and the hub check their own space instead
     'cpu_busy': None,        # % for an hour; off unless a machine asks for it in settings.json
+    'drive_temp': 70,        # C, the drive's own sensor, all the time for 15 minutes
+    'drive_wear': 70,        # % of the drive's rated life used (the PC reporter sends it)
 }
+DRIVE_HOT_FOR = 900  # seconds over drive_temp before it's a problem (a big copy warms a drive for a minute or two)
 # Address prefixes allowed to post reports and to open the page: the private ranges and Home Assistant's ingress.
 DEFAULT_NETWORKS = ('10.', '127.', '192.168.', *(f'172.{n}.' for n in range(16, 32)), '172.30.32.')
 
@@ -174,8 +177,9 @@ def limit_for(machine, key):
 
 # ---- the Machines screen: the page's own editor for settings.json -------------------------------------------------
 
-MACHINE_LIMITS = tuple(LIMITS)  # the numbers a machine may have its own of: temp, mem, disk_used_pct, cpu_busy
-LIMIT_RANGES = {'temp': (1, 150), 'mem': (1, 100), 'disk_used_pct': (1, 100), 'cpu_busy': (1, 100)}
+MACHINE_LIMITS = tuple(LIMITS)  # the numbers a machine may have its own of (all of LIMITS)
+LIMIT_RANGES = {'temp': (1, 150), 'mem': (1, 100), 'disk_used_pct': (1, 100), 'cpu_busy': (1, 100),
+                'drive_temp': (1, 150), 'drive_wear': (1, 100)}
 
 
 def read_settings():
@@ -450,6 +454,10 @@ def take_report(rep):
             m.setdefault('mem_high_since', now)
         else:
             m.pop('mem_high_since', None)
+        if (metrics.get('drive_temp') or 0) >= limit_for(machine, 'drive_temp'):
+            m.setdefault('drive_hot_since', now)
+        else:
+            m.pop('drive_hot_since', None)
     history.write(machine, now, metrics)
     if procs:
         trail.write_procs(machine, now, procs)
@@ -488,6 +496,13 @@ def current_problems():
             if since and now - since >= 3600:
                 mem = limit_for(machine, 'mem')
                 out[f'{machine}-memory'] = (name, f"Memory has been over {mem:g}% full for {(now - since) / 3600:.0f} hours")
+            since = m.get('drive_hot_since')
+            if since and now - since >= DRIVE_HOT_FOR:
+                out[f'{machine}-drive-hot'] = (name, (f"Drive is running hot: {mt.get('drive_temp', 0):.0f} C for "
+                                                      f"{(now - since) / 60:.0f} minutes"))
+            wear = mt.get('drive_wear')
+            if wear is not None and wear >= limit_for(machine, 'drive_wear'):
+                out[f'{machine}-drive-wear'] = (name, f"Drive says {wear:.0f}% of its life is used. Plan a replacement.")
             since = m.get('cpu_high_since')
             if since and now - since >= 3600:
                 top = ', '.join(f"{p} {v:.0f}%" for p, v in (m.get('procs') or [])[:3])
