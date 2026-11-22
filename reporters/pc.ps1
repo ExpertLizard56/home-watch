@@ -52,18 +52,56 @@ Get-Volume | Where-Object { $_.DriveLetter -and $_.DriveType -eq 'Fixed' -and $_
 $errors = @(Get-WinEvent -FilterHashtable @{ LogName = 'System'; ProviderName = 'disk', 'Ntfs', 'stornvme'; Level = 1, 2; StartTime = (Get-Date).AddHours(-2) } -MaxEvents 20 -ErrorAction SilentlyContinue)
 if ($errors.Count -gt 0) { $problems['disk-errors'] = "$($errors.Count) disk errors in Windows' log in the last 2 hours" }
 
-# Drive wear and temperature from Windows' own counters (only readable when the task runs with highest privileges).
-try {
-    $rel = Get-PhysicalDisk | Get-StorageReliabilityCounter -ErrorAction Stop
-    $temps = @($rel | Where-Object Temperature -gt 0 | ForEach-Object Temperature)
-    if ($temps) { $metrics.drive_temp = ($temps | Measure-Object -Maximum).Maximum }
-    $wear = @($rel | Where-Object { $null -ne $_.Wear } | ForEach-Object Wear)
-    if ($wear) { $metrics.drive_wear = ($wear | Measure-Object -Maximum).Maximum }  # the hub's drive_wear limit decides
-    foreach ($r in $rel) {
-        $bad = [long]$r.ReadErrorsUncorrected + [long]$r.WriteErrorsUncorrected
-        if ($bad -gt 0) { $problems["drive-errors-$($r.DeviceId)"] = "Drive $($r.DeviceId) has $bad errors it couldn't correct (read $($r.ReadErrorsUncorrected), write $($r.WriteErrorsUncorrected)). Back it up." }
+# Drive wear, temperature and uncorrected errors (only readable when the task runs with highest privileges). NVMe
+# drives: their own health log (page 2), as Windows' disk settings page reads it, since Windows' Wear counter is often
+# blank for them. Other drives: Windows' reliability counters.
+Add-Type -TypeDefinition @'
+using System; using System.Runtime.InteropServices; using Microsoft.Win32.SafeHandles;
+public static class NvmeHealth {
+    [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    static extern SafeFileHandle CreateFile(string n, uint a, uint s, IntPtr sa, uint c, uint f, IntPtr t);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    static extern bool DeviceIoControl(SafeFileHandle h, uint code, byte[] i, int il, byte[] o, int ol, out int r, IntPtr ov);
+    public static int Error;
+    public static byte[] Log(string disk) {
+        using (var h = CreateFile(@"\\.\PhysicalDrive" + disk, 0xC0000000, 3, IntPtr.Zero, 3, 0, IntPtr.Zero)) {
+            if (h.IsInvalid) { Error = Marshal.GetLastWin32Error(); return null; }
+            var buf = new byte[8 + 40 + 512];
+            BitConverter.GetBytes(50).CopyTo(buf, 0);   // StorageDeviceProtocolSpecificProperty, standard query
+            BitConverter.GetBytes(3).CopyTo(buf, 8);    // NVMe
+            BitConverter.GetBytes(2).CopyTo(buf, 12);   // a log page
+            BitConverter.GetBytes(2).CopyTo(buf, 16);   // page 2: SMART / health
+            BitConverter.GetBytes(40).CopyTo(buf, 24);  // the page follows the 40-byte request
+            BitConverter.GetBytes(512).CopyTo(buf, 28);
+            int got;
+            if (!DeviceIoControl(h, 0x2D1400, buf, buf.Length, buf, buf.Length, out got, IntPtr.Zero)) { Error = Marshal.GetLastWin32Error(); return null; }
+            var log = new byte[512]; Array.Copy(buf, 48, log, 0, 512); return log;
+        }
     }
-} catch { }
+}
+'@ -ErrorAction SilentlyContinue
+$wear = @(); $temps = @()
+foreach ($d in @(Get-PhysicalDisk)) {
+    $id = $d.DeviceId
+    $log = if ($d.BusType -eq 'NVMe') { [NvmeHealth]::Log($id) }
+    if ($log) {
+        $temps += [BitConverter]::ToUInt16($log, 1) - 273
+        $wear += [int]$log[5]
+        $media = [BitConverter]::ToUInt64($log, 160)
+        if ($media -gt 0) { $problems["drive-errors-$id"] = "Drive $id has $media errors it couldn't correct. Back it up." }
+        if ($log[0] -band 0x0D) { $problems["drive-warning-$id"] = "Drive $id is warning about itself (spare space low, unreliable or read-only). Back it up." }
+        continue
+    }
+    try {
+        $r = $d | Get-StorageReliabilityCounter -ErrorAction Stop
+        if ($r.Temperature -gt 0) { $temps += $r.Temperature }
+        if ($null -ne $r.Wear) { $wear += [int]$r.Wear }
+        $bad = [long]$r.ReadErrorsUncorrected + [long]$r.WriteErrorsUncorrected
+        if ($bad -gt 0) { $problems["drive-errors-$id"] = "Drive $id has $bad errors it couldn't correct. Back it up." }
+    } catch { }
+}
+if ($temps.Count) { $metrics.drive_temp = ($temps | Measure-Object -Maximum).Maximum }
+if ($wear.Count) { $metrics.drive_wear = ($wear | Measure-Object -Maximum).Maximum }  # the hub's drive_wear limit decides
 
 $report = [ordered]@{
     machine = 'pc'; name = 'This PC'; kind = 'windows'
