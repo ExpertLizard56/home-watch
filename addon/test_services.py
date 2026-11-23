@@ -644,3 +644,38 @@ class Api(Helpers):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class HoldHealTest(unittest.TestCase):
+    """A report's hold_heal keeps self-heal off an app for HOLD_FOR seconds."""
+
+    def setUp(self):
+        services.holds.clear()
+        self.notes = []
+        self.check = {'id': 90, 'name': 'Z-Wave JS UI', 'type': 'http', 'app': 'z_wave', 'heal': True}
+
+    def tearDown(self):
+        services.holds.clear()
+
+    def test_a_held_app_is_not_restarted_and_the_log_says_why(self):
+        services.hold({'Z-Wave': 'its stick is unplugged'}, NOW)
+        with mock.patch.object(services, 'heal_containers', {'z_wave': 'home-zwave-1'}), \
+                mock.patch.object(services, 'restart_container') as restart, \
+                mock.patch.object(services.time, 'time', return_value=NOW + 60):
+            services.heal(self.check, 'down', 'no answer', {'self_heal': True}, self.notes.append)
+        restart.assert_not_called()
+        self.assertIn('its stick is unplugged', self.notes[0])
+
+    def test_a_hold_runs_out(self):
+        services.hold({'z_wave': 'unplugged'}, NOW)
+        self.assertIsNone(services.held('z_wave', NOW + services.HOLD_FOR + 1))
+        self.assertNotIn('z_wave', services.holds)
+
+    def test_junk_is_ignored(self):
+        services.hold(['z_wave'], NOW)
+        services.hold({'': 'x', '  ': 'y'}, NOW)
+        self.assertEqual(services.holds, {})
+
+    def test_a_report_carries_the_hold(self):
+        watch.take_report({'machine': 'radios', 'name': 'Smart home radios', 'hold_heal': {'thread_zbt_1': 'unplugged'}})
+        self.assertEqual(services.held('thread_zbt_1'), 'unplugged')

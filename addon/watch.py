@@ -412,7 +412,7 @@ def clean_notes(raw):
 
 def take_report(rep):
     """A report: {machine, name, kind, metrics:{...}, counters:{...}, cpu_ticks:[total, idle], problems:{key: message},
-    notes:{label: text}}."""
+    notes:{label: text}, hold_heal:{app: why}}."""
     machine = machine_id(rep.get('machine'))
     if not machine:
         raise ValueError('no machine')
@@ -445,6 +445,7 @@ def take_report(rep):
             m['notes'] = notes
         else:
             m.pop('notes', None)
+        services.hold(rep.get('hold_heal'), now)  # apps self-heal should leave alone (their hardware is missing)
         procs = trail.clean_procs(rep.get('procs'))
         if procs:
             m['procs'] = procs

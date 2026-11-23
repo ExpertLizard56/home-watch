@@ -54,7 +54,7 @@ A reporter posts JSON to `POST /report` on port 8790 (host networking), every 5 
 
 ```
 {machine, name, kind, metrics:{...}, counters:{...}, cpu_ticks:[total, idle], procs:[[name, %], ...], problems:{key: msg},
- notes:{label: text}}
+ notes:{label: text}, hold_heal:{app: why}}
 ```
 
 Reporters send **raw counters** (bytes read and written, bytes received and sent, CPU ticks since boot). The hub works
@@ -212,7 +212,10 @@ Self-heal is off unless the `self_heal` option is on and `self_heal_webhook` is 
 notices. On a check that goes down (or comes back up) it posts Uptime Kuma's message shape —
 `{"heartbeat": {"status", "msg", "time"}, "monitor": {"name", "type", "script"}, "msg"}` — where `monitor.script` is
 `settings.json`'s `heal_script` with the check's `app` filled in (its name made into a slug when it has no `app`), so the
-automation behind the webhook can start that script. With the option off, the add-on logs what it would have done.
+automation behind the webhook can start that script. With the option off, the add-on logs what it would have done. A report's `hold_heal`, `{app: why}`, puts those apps on hold for 15 minutes
+(`services.hold`; the reporter sends it again each report while it applies): a held app's check can go down without
+self-heal touching it, and the log says why. It is for a reporter that knows the app cannot work, such as one whose
+USB radio stick is unplugged, so self-heal doesn't restart it over and over for nothing.
 
 ### Trail
 

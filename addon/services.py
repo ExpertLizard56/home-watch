@@ -99,6 +99,8 @@ machine = None  # watch.py sets this: machine id -> its latest report (or None)
 heal_script = HEAL_SCRIPT  # watch.py sets this from settings.json
 heal_containers = {}  # {app: container name}: watch.py sets this from settings.json; restarted through Docker
 healed = {}  # {app: when its container was last restarted}
+holds = {}  # {app: (until, why)}: apps a reporter asked self-heal to leave alone (hold_heal); see hold()
+HOLD_FOR = 900  # seconds a hold lasts; a reporter sends it again with every report while it still applies
 HEAL_COOLDOWN = 900  # seconds between two restarts of one app, as the Home Assistant script's 15 min wait
 DOCKER_SOCKET = '/var/run/docker.sock'
 samples = {}  # check id -> [ok, checks, ms total, ms count] since the last row was written
@@ -901,10 +903,38 @@ def heal_container(m, state, options, note, now=None):
         note(f"self-heal could not restart {name}: {e}")
 
 
+def hold(asked, now=None):
+    """A report's hold_heal, {app: why}: self-heal leaves those apps alone for HOLD_FOR seconds. A reporter that knows
+    an app cannot work (its USB stick is unplugged, say) sends it, so a down check doesn't restart the app over and
+    over for nothing. App names are slugged the way a check's app is."""
+    if not isinstance(asked, dict):
+        return
+    now = time.time() if now is None else now
+    for app, why in asked.items():
+        app = re.sub(r'[^a-z0-9]+', '_', str(app).lower()).strip('_')
+        if app:
+            holds[app] = (now + HOLD_FOR, str(why)[:200])
+
+
+def held(app, now=None):
+    """Why self-heal is holding off on an app, or None."""
+    now = time.time() if now is None else now
+    got = holds.get(app)
+    if got and got[0] > now:
+        return got[1]
+    holds.pop(app, None)
+    return None
+
+
 def heal(m, state, detail, options, note):
     """Post the message Home Assistant's self-heal automation reads, naming the script it should run
     (settings.json's heal_script with {app} filled in). Only when the add-on's self_heal option is on.
-    An app listed in heal_containers is restarted through Docker instead (heal_container)."""
+    An app listed in heal_containers is restarted through Docker instead (heal_container). An app a reporter
+    put on hold (hold_heal) is left alone while it goes down."""
+    why = held(app_name(m))
+    if why and state == 'down':
+        note(f"self-heal holds off on {m['name']}: {why}")
+        return
     if app_name(m) in heal_containers:
         return heal_container(m, state, options, note)
     hook = options.get('self_heal_webhook')
