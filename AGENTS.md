@@ -23,6 +23,8 @@ That base image is published for aarch64 and amd64, which is why `config.yaml` c
   It reports itself as machine `pi`, kind `pi`.
 - `services.py` — the service checks from `monitors.json`: the checks themselves, their status and retry rules, the
   event and per-check CSVs, beats.json, uptime/bars/outages, the push codes and self-heal.
+- `parts.py` — part health: polls other apps' own part lists (settings.json `part_health`) every round and sends one
+  notice when a part turns broken and one when it works again (`test_parts.py` fakes the app and its failure).
 - `trail.py` — the busiest programs every Linux report carries, the syslog lines machines send in, and the range the
   page's Logs section downloads (a `.log` for one machine, a `.zip` of one each for several).
 - `page.html` — the page: one file, plain SVG, no libraries. Five views (everything, one machine, one check, the checks
@@ -83,6 +85,7 @@ Everything lives in `/share/home-watch` (`HOME_WATCH_DATA` moves it), as plain f
 - `programs/<machine> <year-month>.csv` — programs at 1% of the CPU or more, per report, 12 months.
 - `logs/<machine> <year-month>.log` — the syslog lines a machine sent in, 3 months.
 - `state.json` — the live state; written at every check and on SIGTERM, so an update or restart loses no report.
+- `parts.json` — part health's last answer per app and part (broken, reason), so a restart sends nothing twice.
 - `log.txt` — the add-on's own log (it also goes to stdout).
 - `monitors.json` — the check list (below); `settings.json` — the house's own names and numbers (below).
 - `push-codes.json` — the push checks' codes, `{"<check id>": "<code>"}`, written whole at 0600.
@@ -108,6 +111,10 @@ works.
 - `heal_script` — the Home Assistant script self-heal calls, with `{app}` filled in per check (default
   `script.home_watch_heal_{app}`). A value with no `{app}` is refused out loud, since it would call one script for every
   app.
+- `part_health` — `[{"name": "<app>", "url": "<its part list>"}]`: apps that serve a JSON object with a `parts` (or
+  `sources`) list of `{"name", "broken", "reason"}`. Each part that turns broken sends one notice, titled with the app's
+  name, `<part>: <reason>`; one more says `<part> is working again`. Nothing repeats while it stays broken; an unsent
+  notice is tried again next round; an app that cannot be reached sends nothing (that is a service check's job).
 
 Nothing in `settings.json` is a secret, but it is one house's own list, so it stays out of git — as does the real
 `monitors.json`. The page asks `/api/status` for the order and the labels.

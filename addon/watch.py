@@ -5,8 +5,8 @@ Home watch keeps the history, runs the checks, leaves every notice in Home Assis
 phones (at most once a day per problem), and serves the page (the Home Assistant sidebar, or the add-on's port).
 
 The parts: watch.py (this: reports, checks, alerts, the web door), history.py (the CSV history), pi.py (the hub's own
-report), services.py (the service checks), trail.py (each machine's busiest programs and the logs machines send),
-page.html (the page).
+report), services.py (the service checks), parts.py (other apps' own part lists), trail.py (each machine's busiest
+programs and the logs machines send), page.html (the page).
 
 GET /health answers the Supervisor's watchdog (config.yaml's `watchdog`): 200 "ok" while the service-check loop is
 going round, 503 with a short reason when it has stopped, so Home Assistant restarts an add-on that hangs, not only one
@@ -34,6 +34,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 import history
+import parts
 import pi
 import services
 import trail
@@ -110,8 +111,8 @@ def load_settings(note=None):
     after a change from the page's Machines screen, which writes the file: machines (the page's order, and labels),
     limits (one machine's own numbers), log_senders (which address is which machine, for the syslog trail),
     allowed_networks (who may post reports and open the page), heal_script (the Home Assistant script self-heal
-    calls, {app} filled in per check) and heal_containers ({app: container}: outside Home Assistant, self-heal restarts
-    that container through Docker instead)."""
+    calls, {app} filled in per check), heal_containers ({app: container}: outside Home Assistant, self-heal restarts
+    that container through Docker instead) and part_health (other apps' part lists to watch, parts.py)."""
     global order, labels, limits, networks, heal_script
     got, read = {}, False
     try:
@@ -167,6 +168,7 @@ def load_settings(note=None):
     asked = got.get('heal_containers')  # outside Home Assistant: {app: container} restarted through Docker
     services.heal_containers = {str(k).strip(): str(v).strip() for k, v in asked.items()
                                 if str(k).strip() and str(v).strip()} if isinstance(asked, dict) else {}
+    parts.configure(got.get('part_health'), note)  # other apps' own part lists (parts.py)
     if note and read:
         note(f"settings.json: {len(order)} machines in order, {len(labels)} labels, {len(limits)} with their own limits, "
              f"{len(senders)} log senders, {len(networks)} address prefixes allowed")
@@ -652,7 +654,8 @@ def loop():
     last_tidy = 0
     while True:
         started = time.time()
-        for what, job in (('Hub report', lambda: take_report(pi.report(note))), ('check', check)):
+        for what, job in (('Hub report', lambda: take_report(pi.report(note))), ('check', check),
+                          ('part health', lambda: parts.check(send, note))):
             try:
                 job()
             except Exception as e:
